@@ -1,0 +1,6 @@
+numpy>=1.19.0
+matplotlib>=3.3.0
+scikit-image>=0.18.0
+tifffile>=2021.4.8
+opencv-python>=4.5.0
+ipywidgets>=7.6.0
