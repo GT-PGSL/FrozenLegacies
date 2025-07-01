@@ -435,4 +435,23 @@ class ZScopeProcessor:
             f"INFO: Main calibrated plot saved to {self.output_dir / (self.base_filename + '_time_calibrated_zscope.png')}"
         )
 
+        # Step 8: Export ice measurements (optional)
+        print("\nStep 8: Exporting ice measurements...")
+        export_config = self.config.get("data_export_params", {})
+        if export_config.get("export_enabled", True):  # Default to enabled
+            from functions.data_export import export_ice_measurements_with_config
+
+            export_success = export_ice_measurements_with_config(self, export_config)
+            if export_success:
+                print("INFO: Ice measurements exported successfully.")
+            else:
+                print("WARNING: Ice measurements export failed.")
+        else:
+            print("INFO: Data export disabled in configuration.")
+
+        print(f"\n--- Processing for {self.base_filename} complete. ---")
+        print(
+            f"INFO: Main calibrated plot saved to {self.output_dir / (self.base_filename + '_time_calibrated_zscope.png')}"
+        )
+
         return True
