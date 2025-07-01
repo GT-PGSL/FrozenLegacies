@@ -2,7 +2,7 @@ from PIL import Image, ImageFile
 import numpy as np
 import cv2
 from pathlib import Path
-import os  # For ensuring output directory exists if we add saving utils later
+import os  
 
 
 def load_and_preprocess_image(image_path_str, preprocessing_params=None):
