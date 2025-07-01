@@ -28,7 +28,7 @@ def load_and_preprocess_image(image_path_str, preprocessing_params=None):
         return None
 
     try:
-        # Allow PIL to load truncated images to prevent common errors with large/corrupted files [2]
+        # Allow PIL to load truncated images to prevent common errors with large/corrupted files
         ImageFile.LOAD_TRUNCATED_IMAGES = True
 
         pil_img = Image.open(image_path)
@@ -51,9 +51,9 @@ def load_and_preprocess_image(image_path_str, preprocessing_params=None):
 
             # Avoid division by zero if p_low_val and p_high_val are the same
             if p_high_val == p_low_val:
-                if p_low_val > 0:  # If image is not all black
+                if p_low_val > 0:  
                     img_np = np.where(img_np > 0, 255, 0).astype(np.uint8)
-                else:  # Image is all black or uniform
+                else:  
                     img_np = np.zeros_like(img_np, dtype=np.uint8)
             else:
                 img_np = np.clip(
