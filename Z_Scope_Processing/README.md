@@ -1,4 +1,4 @@
-![Z_Scope_Processor Logo](docs/logo.png)
+![Z_Scope_Processor Logo](docs/logo-echo-explore-combine.png)
 # Z_Scope_Processor
 
 **Z_Scope_Processor** is a Python package for loading, analyzing, interpreting, and labeling historical Z-scope radar sounding images (echograms) collected in the 1970s SPRI/NSF/TUD airborne radar surveys across Antarctica.
