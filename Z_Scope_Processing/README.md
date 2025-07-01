@@ -68,7 +68,7 @@ pip install -r requirements.txt
 
 ## Usage
 
-### Option 1: Running from VSCode
+### Running from VSCode
 
 1. **Open the Project**  
 Launch VSCode and open the `Z_Scope_Processing` folder.
@@ -99,7 +99,7 @@ If you do not specify `--non_interactive_pip_x`, you will be prompted to click o
 5. **Debugging**  
 - To run in debug mode, click the "Run and Debug" icon in the sidebar and select "Python File".
 
-### Option 2: Command Line Usage
+### Command Line Usage
 
 You can also run the processor directly from the terminal:
 ```
