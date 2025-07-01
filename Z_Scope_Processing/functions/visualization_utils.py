@@ -61,10 +61,10 @@ def visualize_calibration_pip_detection(
         None. The function saves the plot to a file and may display it.
     """
     if visualization_params is None:
-        visualization_params = {}  # Ensure it's a dict to allow .get()
+        visualization_params = {}  
     if (
         output_params is None
-    ):  # This default should ideally not be hit if called from ZScopeProcessor
+    ): 
         output_params = {
             "debug_output_directory": "debug_output",
             "figure_save_dpi": 300,
@@ -108,10 +108,9 @@ def visualize_calibration_pip_detection(
     # Shows a wide view of the Z-scope image around the approximate pip location.
     # A red rectangle highlights the specific vertical strip that was analyzed for pips.
     context_width = visualization_params.get("context_panel_width_px", 10000)
-    # Define vertical extent for context: from a bit above first tick to below Z-boundary.
     y_start_context = int(best_pip["y_start"] - 100)
     y_end_context = int(best_pip["z_boundary"] + 50)
-    y_start_context = max(0, y_start_context)  # Ensure within image bounds
+    y_start_context = max(0, y_start_context)  
     y_end_context = min(image_full.shape[0], y_end_context)
 
     # Define horizontal extent for context, centered on user click or detected pip.
@@ -131,7 +130,7 @@ def visualize_calibration_pip_detection(
         cmap="gray",
         aspect="auto",
         extent=[context_x_start_abs, context_x_end_abs, y_end_context, y_start_context],
-    )  # Set extent for correct coord display
+    )  
     ax1.set_title("1. Context: Pip Location")
     ax1.set_xlabel("X-pixel (Full Image)")
     ax1.set_ylabel("Y-pixel (Full Image)")
@@ -146,7 +145,7 @@ def visualize_calibration_pip_detection(
         (
             rect_x_abs_start,
             y_start_context,
-        ),  # Using absolute coordinates based on extent
+        ),
         pip_strip_display_width,
         y_end_context - y_start_context,
         linewidth=1,
@@ -241,7 +240,6 @@ def visualize_calibration_pip_detection(
     # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization) for better local contrast.
     if zoomed_crop_full_image.size > 0:  # Ensure crop is not empty
         clahe_zoom = cv2.createCLAHE(clipLimit=clahe_clip, tileGridSize=clahe_tile)
-        # Ensure image is uint8 for CLAHE
         if zoomed_crop_full_image.dtype != np.uint8:
             zoomed_crop_uint8 = cv2.normalize(
                 zoomed_crop_full_image, None, 0, 255, cv2.NORM_MINMAX
@@ -252,7 +250,7 @@ def visualize_calibration_pip_detection(
     else:
         zoomed_final_display = np.zeros(
             (10, 10), dtype=np.uint8
-        )  # Placeholder if crop failed
+        ) 
 
     ax3.imshow(
         zoomed_final_display,
@@ -262,7 +260,6 @@ def visualize_calibration_pip_detection(
     )
     ax3.set_title(f"3. Zoom (Avg Spacing: {best_pip['mean_spacing']:.1f}px)")
     ax3.set_xlabel("X-pixel (Full Image)")
-    # ax3.set_ylabel("Y-pixel (Full Image)")
 
     # Draw ticks in this zoomed panel using their absolute Y-coordinates.
     for tick_y_abs in best_pip["tick_positions"]:
@@ -273,12 +270,11 @@ def visualize_calibration_pip_detection(
             )
 
     # Final adjustments and save.
-    plt.tight_layout(rect=[0, 0, 1, 0.96])  # Adjust for suptitle
+    plt.tight_layout(rect=[0, 0, 1, 0.96]) 
     plot_path = output_dir / f"{base_filename}_calibration_pip_detection_overview.png"
     plt.savefig(plot_path, dpi=save_dpi)
     print(f"INFO: Calibration pip detection overview plot saved to {plot_path}")
-    # plt.show(block=False) # Display plot non-blockingly
-    plt.close(fig)  # Close figure to free memory
+    plt.close(fig)  
 
     # Print summary to console.
     print("\nCalibration Pip Detection Summary (for visualization):")
@@ -333,29 +329,29 @@ def apply_publication_style(
     ax.tick_params(axis="both", labelsize=9)
     time_ax.tick_params(axis="both", labelsize=9)
 
-    # Reduce grid line visibility - make them much more subtle
+    # Reduce grid line visibility 
     for line in ax.get_lines():
-        if line.get_linestyle() == "--":  # Minor grid lines
-            line.set_alpha(0.15)  # Reduced from 0.2
+        if line.get_linestyle() == "--":  
+            line.set_alpha(0.15)  
         elif (
             line.get_linestyle() == "-" and line.get_color() == "white"
-        ):  # Major grid lines
-            line.set_alpha(0.3)  # Reduced from 0.4
+        ):
+            line.set_alpha(0.3)  
 
     # Update colors and line styles for existing traces
     for line in ax.get_lines():
         # Transmitter pulse line (blue)
         if line.get_color() == "blue":
-            line.set_color("#4477AA")  # Professional blue
+            line.set_color("#4477AA")  
             line.set_linewidth(1.5)
             line.set_alpha(0.9)
 
         # Calibration pip column (green)
         if line.get_color() == "g":
-            line.set_color("#999933")  # Muted gold
+            line.set_color("#999933")  
             line.set_linewidth(1.0)
             line.set_alpha(0.6)
-            line.set_linestyle(":")  # Dotted line
+            line.set_linestyle(":")  
 
     # Update the legend
     legend = ax.get_legend()
@@ -440,12 +436,11 @@ def apply_publication_style(
                 bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="black", alpha=0.8),
             )
 
-    # Add to apply_publication_style around line 390
-    # Add horizontal scale bar if pixels_per_microsecond is available
+    # Add to apply_publication_style 
     if pixels_per_microsecond is not None:
         # Estimate horizontal scale (assuming similar horizontal/vertical scaling)
-        km_per_pixel = 0.169 / pixels_per_microsecond  # Example conversion factor
-        bar_length_km = 5  # 5 km scale bar
+        km_per_pixel = 0.169 / pixels_per_microsecond  
+        bar_length_km = 5  
         bar_length_px = bar_length_km / km_per_pixel
 
         # Get the axes dimensions
@@ -669,8 +664,8 @@ def create_time_calibrated_zscope(
             return time_us_to_cropped_y(two_way_time_us)
 
         # --- Set up the axes ---
-        ax.yaxis.set_visible(True)  # Ensure the main y-axis is visible
-        ax.set_ylabel("Depth (m)")  # Set the label for the main axis
+        ax.yaxis.set_visible(True)  
+        ax.set_ylabel("Depth (m)")  
 
         # Calculate depth at transmitter pulse (should be 0)
         tx_depth = cropped_y_to_depth_m(tx_y_cropped)
@@ -679,7 +674,7 @@ def create_time_calibrated_zscope(
         max_depth = cropped_y_to_depth_m(valid_data_crop.shape[0])
 
         # Create depth ticks at regular intervals - ensure we start at 0 (transmitter pulse)
-        num_ticks = 7  # Adjust for desired tick density
+        num_ticks = 7  
         depth_ticks = np.linspace(0, max_depth, num_ticks)
         y_tick_positions = [depth_m_to_cropped_y(d) for d in depth_ticks]
 
