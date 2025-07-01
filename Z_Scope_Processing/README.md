@@ -1,5 +1,5 @@
 <p align="left">
-  <img src="docs/logo-echo-explore-combine.png" alt="Z_Scope_Processor Logo" height="64">
+  <img src="docs/logo-echo-explore-combine.png" alt="Z_Scope_Processor Logo" height="80">
   <span style="font-size:2em; vertical-align: middle;">
 </p>
 
