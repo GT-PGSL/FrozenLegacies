@@ -187,6 +187,13 @@
       "debug_output_directory": "debug_output",
       "save_intermediate_plots": true
     }
+  }, 
+    "data_export_params": {
+    "export_enabled": true,
+    "output_filename_suffix": "_ice_measurements.csv",
+    "include_metadata": true,
+    "coordinate_system": "pixel",
+    "output_directory": null
   }
 }
   
