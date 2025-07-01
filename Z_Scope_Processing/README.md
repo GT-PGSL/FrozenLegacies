@@ -86,11 +86,11 @@ Press `Cmd+Shift+P`, type `Python: Select Interpreter`, and choose your Python 3
   python main.py <image_path> <output_dir>
   ```
 
-  Replace `<image_path>` with your radar image file (e.g., `.tif`, `.png`, `.jpg`) and `<output_dir>` with the desired output directory.  
+  Replace `<image_path>` with your radar image file (e.g., `.tiff`, `.png`, `.jpg`) and `<output_dir>` with the desired output directory.  
   Example:
 
   ```
-  python main.py data/echogram_001.tif output/
+  python main.py data/echogram_001.tiff output/
   ```
 
 4. **Interactive Calibration**  
