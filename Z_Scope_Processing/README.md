@@ -1,6 +1,6 @@
 <p align="left">
   <img src="docs/logo-echo-explore-combine.png" alt="Z_Scope_Processor Logo" height="64">
-  <span style="font-size:2em; vertical-align: middle;"><b>Z_Scope_Processor</b></span>
+  <span style="font-size:2em; vertical-align: middle;">
 </p>
 
 # Z-Scope Processor
