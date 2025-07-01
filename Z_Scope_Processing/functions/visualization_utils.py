@@ -861,7 +861,6 @@ def annotate_radar_features(
             color=line_color,
             fontsize=9,
             fontweight="bold",
-            # Path effects add a slight stroke around text for better readability on varying backgrounds.
             path_effects=[
                 path_effects.withStroke(linewidth=2, foreground="white", alpha=0.5)
             ],
