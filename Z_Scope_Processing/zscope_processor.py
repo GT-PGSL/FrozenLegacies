@@ -185,7 +185,6 @@ class ZScopeProcessor:
         )
 
         # Step 4: Detect calibration pip (requires approx_x_pip from user)
-        # Before calling detect_calibration_pip, we need to determine z_boundary_y for its strip.
         print(f"\nStep 4: Detecting calibration pip around X-pixel {approx_x_pip}...")
         if approx_x_pip is None:
             print(
@@ -194,8 +193,6 @@ class ZScopeProcessor:
             return False
 
         # Determine Z-scope boundary for the vertical strip where pip is expected.
-        # This replicates logic from original script's detect_calibration_pip.
-        # Define a narrow vertical slice around the approx_x_pip for Z-boundary detection.
         pip_detection_strip_config = self.config.get("pip_detection_params", {}).get(
             "approach_1", {}
         )
@@ -225,12 +222,9 @@ class ZScopeProcessor:
         )
 
         z_boundary_y_for_pip = detect_zscope_boundary(
-            vertical_slice_for_z,  # Pass the narrow vertical strip
+            vertical_slice_for_z, 
             self.data_top_abs,  # Search within these absolute Y bounds
             self.data_bottom_abs,
-            # Parameters from config for detect_zscope_boundary would be passed here
-            # For now, assuming detect_zscope_boundary has reasonable defaults or they are in its own config section
-            # For example: z_boundary_params_config.get("gradient_smooth_kernel", 31)
         )
         print(
             f"INFO: Z-scope boundary for pip strip detected at Y-pixel (absolute): {z_boundary_y_for_pip}"
@@ -243,8 +237,8 @@ class ZScopeProcessor:
             approx_x_pip,
             self.data_top_abs,
             self.data_bottom_abs,
-            z_boundary_y_for_pip,  # Pass the detected Z-boundary for this specific strip
-            pip_detection_params=pip_detection_main_config,  # Pass the whole sub-dictionary
+            z_boundary_y_for_pip,  
+            pip_detection_params=pip_detection_main_config,  
         )
 
         # Step 5: Visualize calibration pip detection
@@ -258,7 +252,7 @@ class ZScopeProcessor:
             self.best_pip_details,
             approx_x_click=approx_x_pip,
             visualization_params=pip_visualization_params_config,
-            output_params=current_output_params,  # Pass consolidated output params
+            output_params=current_output_params,  
         )
 
         if not self.best_pip_details:
@@ -338,7 +332,7 @@ class ZScopeProcessor:
             print(f"INFO: Detecting surface echo with config: {surface_config}")
             surface_y_rel = detect_surface_echo(
                 valid_data_crop,
-                tx_pulse_y_rel,  # This is the reference point for the offset inside detect_surface_echo
+                tx_pulse_y_rel,  
                 surface_config,
             )
 
@@ -362,12 +356,12 @@ class ZScopeProcessor:
                 )
                 print(
                     f"    - z_boundary_y_rel (NOW BASED ON data_bottom_abs, relative to crop): {z_boundary_y_rel}"
-                )  # Will be much larger
+                )  
 
                 bed_y_rel = detect_bed_echo(
                     valid_data_crop,
                     surface_y_rel,
-                    z_boundary_y_rel,  # Pass the new, deeper z_boundary_y_rel
+                    z_boundary_y_rel,  
                     bed_config,
                 )
                 if np.any(
@@ -398,12 +392,12 @@ class ZScopeProcessor:
                     valid_data_crop.shape[1] if valid_data_crop is not None else 100,
                     np.nan,
                 )
-        else:  # This 'else' corresponds to the "if self.image_np is not None ..." block
+        else:  
             print(
                 "WARNING: Skipping automatic echo tracing due to missing prerequisite data (e.g., image not loaded)."
             )
             # Ensure attributes are initialized to prevent errors later
-            width_for_nan_fallback = 100  # A default width if image_np is None
+            width_for_nan_fallback = 100  
             if self.image_np is not None:
                 width_for_nan_fallback = self.image_np.shape[1]
             self.detected_surface_y_abs = np.full(width_for_nan_fallback, np.nan)
@@ -427,8 +421,8 @@ class ZScopeProcessor:
                 time_vis_params=time_vis_params_config,
                 physics_constants=self.physics_constants,
                 output_params=current_output_params,
-                surface_y_abs=self.detected_surface_y_abs,  # Pass detected surface
-                bed_y_abs=self.detected_bed_y_abs,  # Pass detected bed
+                surface_y_abs=self.detected_surface_y_abs,  
+                bed_y_abs=self.detected_bed_y_abs,  
             )
         )
 
