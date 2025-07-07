@@ -15,10 +15,11 @@
 - [Requirements](#requirements)
 - [Installation](#installation)
 - [Usage](#usage)
-  - [Running from VSCode](#running-from-vscode)
-  - [Command Line Usage](#command-line-usage)
+  - [Single Image Processing](#single-image-processing)
+  - [Batch Processing](#batch-processing)
 - [Configuration](#configuration)
-- [Output](#output)
+- [Core Processing Pipeline](#core-processing-pipeline)
+- [Output Files](#output-files)
   
 ---
 
@@ -146,28 +147,6 @@ For each processed image, the system generates:
 3. **Debug Output**: Detailed processing logs and intermediate results
 
 --- 
-
-## 📁 Project Structure
-
-Recommended project structure to run this Python Package: 
-
-Z_Scope_Processing/
-├── main.py # Main processing script
-├── zscope_processor.py # Core processing engine
-├── functions/
-│ ├── visualization_utils.py # Enhanced CBD detection & visualization
-│ ├── image_utils.py # Image loading and preprocessing
-│ ├── artifact_detection.py # Film boundary detection
-│ ├── feature_detection.py # Pulse and pip detection
-│ ├── calibration_utils.py # Time calibration functions
-│ ├── echo_tracing.py # Surface/bed echo detection
-│ └── interactive_tools.py # GUI selection tools
-├── config/
-│ ├── default_config.json # Processing parameters
-│ └── physical_constants.json # Physical constants
-└── README.md
-
----
 
 *Part of the FrozenLegacies project - preserving and analyzing historical Antarctic radar data for climate science research.*
 
