@@ -67,14 +67,6 @@ This package enables researchers to:
 - Time-calibrated depth measurements
 - Enhanced coordinate interpolation for geospatial analysis
 
-## 👥 Collaborative Team
-
-### Participating Institutions
-
-- **Georgia Tech Planetary and Geosciences Laboratory (GT-PGSL)**
-- **Stanford Radio Glaciology Laboratory**
-- **Colorado School of Mines**
-
 ### Research Focus Areas
 
 - Ice sheet dynamics and evolution
@@ -146,10 +138,4 @@ This project builds upon decades of Antarctic research and the pioneering work o
 *Frozen Legacies: Preserving and analyzing historical Antarctic radar data to understand ice shelf evolution and inform future climate projections.*
 
 **Explore the pioneering fieldwork and aircraft that made this research possible through our comprehensive data processing and analysis tools.**
-
-[1] https://ppl-ai-file-upload.s3.amazonaws.com/web/direct-files/attachments/11996150/4ab004b0-bc03-4d1e-993b-47f8ddab853a/visualization_utils.py
-[2] https://ppl-ai-file-upload.s3.amazonaws.com/web/direct-files/attachments/11996150/c25f2435-c412-4f76-8f61-0e82b0a1b82f/main.py
-[3] https://ppl-ai-file-upload.s3.amazonaws.com/web/direct-files/attachments/11996150/90207432-807a-422d-b686-c1c488a25902/zscope_processor.py
-[4] https://ppl-ai-file-upload.s3.amazonaws.com/web/direct-files/attachments/11996150/50582684-9a8c-4ef6-a6cf-019776b4f3b4/index.html
-[5] https://ppl-ai-file-upload.s3.amazonaws.com/web/direct-files/attachments/11996150/1ee861c6-88f2-486e-8110-97a148185a4a/description.html
 
