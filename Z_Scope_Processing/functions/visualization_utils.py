@@ -719,6 +719,7 @@ def create_time_calibrated_zscope(
     nav_df=None,
     nav_path=None,
     main_output_dir=None,
+    processor_ref=None,
 ):
     plt.rcParams.update(
         {
@@ -770,6 +771,10 @@ def create_time_calibrated_zscope(
     )
 
     fig, ax = plt.subplots(figsize=(24, 10))
+
+    # Store processor reference for CBD tick storage
+    if processor_ref is not None:
+        ax._processor_ref = processor_ref
 
     ax.imshow(
         enhanced_data,
@@ -864,13 +869,11 @@ def create_time_calibrated_zscope(
                     zorder=3,
                 )
 
-    # --- ENHANCED MANUAL CBD TICK MARK SELECTION WITH LOCAL REFINEMENT ---
+    # --- MANUAL CBD TICK MARK SELECTION WITH LOCAL REFINEMENT ---
     detection_method = output_params.get("cbd_detection_method", "manual")
 
     if detection_method == "manual":
-        print(
-            "Using ENHANCED manual CBD tick mark selection with local image recognition..."
-        )
+        print("Using manual CBD tick mark selection with local image recognition...")
         cbd_tick_xs = manual_cbd_tick_selection(
             image_full,
             expected_count=13,
@@ -914,7 +917,7 @@ def create_time_calibrated_zscope(
             )
 
             ax.set_xlabel(
-                "CBD\nLat (stanford), Lon (stanford)\nLat (bingham), Lon (bingham)",
+                "CBD\nLat, Lon (Stanford)\nLat, Lon (Bingham)",
                 fontsize=14,
                 fontweight="bold",
             )
@@ -952,7 +955,7 @@ def create_time_calibrated_zscope(
             zorder=6,
         )
 
-    # Ice thickness calculations (existing code remains the same)
+    # Ice thickness calculations
     if (
         surface_y_abs is not None
         and bed_y_abs is not None
@@ -1055,7 +1058,7 @@ def create_time_calibrated_zscope(
         return transmitter_pulse_y_abs + y_rel
 
     depth_ax = ax.secondary_yaxis("left", functions=(abs_y_to_depth, depth_to_abs_y))
-    depth_ax.set_ylabel("Depth below phase center (m)", fontsize=16, fontweight="bold")
+    depth_ax.set_ylabel("Depth Below Phase Center (m)", fontsize=16, fontweight="bold")
     depth_ax.tick_params(
         axis="y",
         which="both",
@@ -1094,7 +1097,7 @@ def create_time_calibrated_zscope(
     plt.subplots_adjust(left=0.12, right=0.88, bottom=0.10, top=0.95)
 
     ax.set_title(
-        f"Time-Calibrated Z-scope: {base_filename} (Enhanced with Local Refinement)",
+        f"Picked Z-scope: {base_filename}",
         fontsize=20,
         fontweight="bold",
     )
@@ -1106,5 +1109,9 @@ def create_time_calibrated_zscope(
 
     fig.savefig(main_plot_path, dpi=save_dpi)
     plt.close(fig)
+
+    # Store CBD tick positions for export
+    if "cbd_tick_xs" in locals() and cbd_tick_xs and hasattr(ax, "_processor_ref"):
+        ax._processor_ref.calculated_ticks = cbd_tick_xs
 
     return fig, ax, time_ax
