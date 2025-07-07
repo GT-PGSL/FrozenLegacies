@@ -106,22 +106,7 @@ We welcome contributions from the scientific community, including:
 - New analysis tools and methods
 - Educational resources and examples
 
-## 📞 Contact and Support
-
-For questions about the project, data access, or collaboration opportunities:
-- **Technical Issues**: Open an issue on this repository
-- **Research Collaboration**: Contact the participating institutions
-- **Educational Partnerships**: Reach out through institutional channels
-
-## 🙏 Acknowledgments
-
-This project builds upon decades of Antarctic research and the pioneering work of early radar glaciologists. We acknowledge:
-- The original SPRI-NSF-TUD Campaign researchers
-- Modern Antarctic research programs (NASA, NSF, international partners)
-- The broader glaciology and climate science communities
-- Students and educators engaging with polar science
 
 *Frozen Legacies: Preserving and analyzing historical Antarctic radar data to understand ice shelf evolution and inform future climate projections.*
 
-**Explore the pioneering fieldwork and aircraft that made this research possible through our comprehensive data processing and analysis tools.**
 
