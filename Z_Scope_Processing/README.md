@@ -23,7 +23,7 @@
   
 ---
 
-## Features
+## 🚀 Features
 
 - Load and preprocess historical Z-scope radar echograms
 - Detect film artifact boundaries and transmitter pulse
@@ -36,7 +36,7 @@
 
 ---
 
-## Requirements
+## 📋 Requirements
 
 - Python 3.11 or 3.12 recommended
 - [VSCode](https://code.visualstudio.com/) (for development)
@@ -46,7 +46,7 @@
 
 ---
 
-## Installation
+## 🛠️ Installation
 
 1. Clone the repository:
 ```
