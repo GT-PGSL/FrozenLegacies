@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 import numpy as np
 import pandas as pd
+from scipy.interpolate import interp1d
 
 from functions.image_utils import load_and_preprocess_image
 from functions.artifact_detection import (
@@ -39,9 +40,11 @@ class ZScopeProcessor:
 
         with open(resolved_config_path, "r") as f:
             self.config = json.load(f)
+
         with open(resolved_physics_path, "r") as f:
             self.physics_constants = json.load(f)
 
+        # Initialize instance variables
         self.image_np = None
         self.base_filename = None
         self.data_top_abs = None
@@ -56,6 +59,7 @@ class ZScopeProcessor:
         self.time_axis = None
         self.output_dir = None
         self.last_pip_details = None
+        self.calculated_ticks = None  # For storing CBD tick positions
 
     def save_calpip_state(self, state_path):
         import numpy as np
@@ -93,7 +97,9 @@ class ZScopeProcessor:
             print(f"WARNING: Calpip state file {state_path} does not exist.")
 
     def export_ice_measurements(self, output_dir):
+        """Export basic 4-column CSV with ice measurements (existing functionality)."""
         output_path = Path(output_dir) / f"{self.base_filename}_ice_measurements.csv"
+
         if (
             self.detected_surface_y_abs is not None
             and self.detected_bed_y_abs is not None
@@ -115,9 +121,248 @@ class ZScopeProcessor:
                 "WARNING: Ice measurements not saved due to missing or mismatched data."
             )
 
+    def export_enhanced_csv_with_coordinates(
+        self, output_dir, nav_df=None, cbd_tick_xs=None
+    ):
+        """
+        Export comprehensive 7-column CSV with full-resolution data and coordinate interpolation.
+
+        Args:
+            output_dir: Output directory path
+            nav_df: Navigation DataFrame with CBD coordinates
+            cbd_tick_xs: List of CBD tick mark x-positions
+
+        Returns:
+            DataFrame with enhanced data or None if failed
+        """
+        output_path = Path(output_dir) / f"{self.base_filename}_thickness.csv"
+
+        # Ensure output directory exists
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if (
+            self.detected_surface_y_abs is None
+            or self.detected_bed_y_abs is None
+            or len(self.detected_surface_y_abs) != len(self.detected_bed_y_abs)
+        ):
+            print("WARNING: Enhanced CSV not exported due to missing echo data.")
+            return None
+
+        print(f"INFO: Starting enhanced CSV export to {output_path}")
+
+        # Create full-resolution x-pixel array
+        x_pixels = np.arange(len(self.detected_surface_y_abs))
+
+        # Convert to one-way travel times (microseconds)
+        surface_time_us = self._convert_pixels_to_one_way_time(
+            self.detected_surface_y_abs
+        )
+        bed_time_us = self._convert_pixels_to_one_way_time(self.detected_bed_y_abs)
+
+        # Calculate ice thickness in meters
+        ice_thickness_meters = self._calculate_ice_thickness_meters(
+            self.detected_surface_y_abs, self.detected_bed_y_abs
+        )
+
+        # Initialize coordinate arrays
+        cbd_numbers = np.full(len(x_pixels), np.nan, dtype=object)
+        latitudes = np.full(len(x_pixels), np.nan)
+        longitudes = np.full(len(x_pixels), np.nan)
+
+        # Coordinate interpolation if navigation data is available
+        if nav_df is not None and cbd_tick_xs is not None and len(cbd_tick_xs) > 0:
+            try:
+                print(
+                    f"INFO: Interpolating coordinates for {len(cbd_tick_xs)} CBD positions"
+                )
+                cbd_numbers, latitudes, longitudes = (
+                    self._interpolate_coordinates_full_resolution(
+                        x_pixels, cbd_tick_xs, nav_df
+                    )
+                )
+                print(
+                    f"INFO: Successfully interpolated coordinates for {np.sum(~np.isnan(latitudes))} pixels"
+                )
+            except Exception as e:
+                print(f"WARNING: Coordinate interpolation failed: {e}")
+        else:
+            print(
+                "INFO: No navigation data or CBD positions available for coordinate interpolation"
+            )
+
+        # Create the required 7-column DataFrame
+        df = pd.DataFrame(
+            {
+                "X (pixel)": x_pixels,
+                "Latitude": latitudes,
+                "Longitude": longitudes,
+                "CBD": cbd_numbers,
+                "Surface Depth (μs)": surface_time_us,
+                "Bed Depth (μs)": bed_time_us,
+                "Ice Thickness (m)": ice_thickness_meters,
+            }
+        )
+
+        # Export with high precision
+        try:
+            df.to_csv(output_path, index=False, float_format="%.6f")
+            print(f"SUCCESS: Enhanced 7-column CSV exported to: {output_path}")
+            print(f"INFO: Data summary: {len(df)} rows, {len(df.columns)} columns")
+            print(
+                f"INFO: Coordinate coverage: {np.sum(~np.isnan(latitudes))}/{len(x_pixels)} pixels"
+            )
+            return df
+        except Exception as e:
+            print(f"ERROR: Failed to save CSV file: {e}")
+            return None
+
+    def _convert_pixels_to_one_way_time(self, y_pixels):
+        """
+        Convert pixel positions to one-way travel time in microseconds.
+        """
+        if self.transmitter_pulse_y_abs is None or self.pixels_per_microsecond is None:
+            return np.full_like(y_pixels, np.nan)
+
+        # Convert to relative pixel position from transmitter pulse
+        y_relative = y_pixels - self.transmitter_pulse_y_abs
+
+        # Convert to two-way travel time
+        two_way_time_us = y_relative / self.pixels_per_microsecond
+
+        # Convert to one-way travel time
+        one_way_time_us = two_way_time_us / 2.0
+
+        return one_way_time_us
+
+    def _calculate_ice_thickness_meters(self, surface_y_pixels, bed_y_pixels):
+        """
+        Calculate ice thickness in meters using proper one-way travel times.
+        """
+        if self.transmitter_pulse_y_abs is None or self.pixels_per_microsecond is None:
+            return np.full_like(surface_y_pixels, np.nan)
+
+        # Get one-way travel times
+        surface_time_us = self._convert_pixels_to_one_way_time(surface_y_pixels)
+        bed_time_us = self._convert_pixels_to_one_way_time(bed_y_pixels)
+
+        # Calculate travel time difference (one-way through ice)
+        ice_travel_time_us = bed_time_us - surface_time_us
+
+        # Convert to meters using physical constants
+        c0 = self.physics_constants.get("speed_of_light_vacuum_mps", 299792458)
+        epsilon_r = self.physics_constants.get("ice_relative_permittivity_real", 3.17)
+        firn_correction = self.physics_constants.get("firn_correction_meters", 0.0)
+
+        # Calculate ice velocity and thickness
+        ice_velocity = c0 / np.sqrt(epsilon_r)  # m/s
+        time_in_seconds = ice_travel_time_us * 1e-6  # Convert μs to seconds
+        ice_thickness = (time_in_seconds * ice_velocity) + firn_correction
+
+        return ice_thickness
+
+    def _interpolate_coordinates_full_resolution(self, x_pixels, cbd_tick_xs, nav_df):
+        """
+        Interpolate Bingham coordinates for all x-pixels with full resolution.
+        """
+        import re
+
+        # Initialize output arrays
+        cbd_numbers = np.full(len(x_pixels), np.nan, dtype=object)
+        latitudes = np.full(len(x_pixels), np.nan)
+        longitudes = np.full(len(x_pixels), np.nan)
+
+        # Extract CBD range from filename
+        cbd_match = re.search(r"C(\d+)_(\d+)", self.base_filename)
+        if not cbd_match:
+            print(
+                f"Warning: Could not extract CBD range from filename: {self.base_filename}"
+            )
+            return cbd_numbers, latitudes, longitudes
+
+        cbd_start = int(cbd_match.group(1))
+        cbd_end = int(cbd_match.group(2))
+
+        # Create CBD sequence (descending order: left to right)
+        if cbd_start > cbd_end:
+            cbd_sequence = list(range(cbd_start, cbd_end - 1, -1))
+        else:
+            cbd_sequence = list(range(cbd_start, cbd_end + 1))
+            cbd_sequence.reverse()
+
+        # Match CBD tick positions with known coordinates
+        valid_cbd_data = []
+
+        for i, tick_x in enumerate(cbd_tick_xs):
+            if i < len(cbd_sequence):
+                cbd_num = cbd_sequence[i]
+
+                # Find navigation data for this CBD
+                nav_row = nav_df[nav_df["CBD"] == cbd_num]
+                if not nav_row.empty:
+                    valid_cbd_data.append(
+                        {
+                            "cbd": cbd_num,
+                            "x_pos": tick_x,
+                            "lat": nav_row["LAT (bingham)"].values[0],
+                            "lon": nav_row["LON (bingham)"].values[0],
+                        }
+                    )
+
+        if len(valid_cbd_data) < 2:
+            print("Warning: Need at least 2 valid CBD positions for interpolation")
+            return cbd_numbers, latitudes, longitudes
+
+        # Extract coordinate arrays for interpolation
+        tick_x_coords = np.array([d["x_pos"] for d in valid_cbd_data])
+        tick_lats = np.array([d["lat"] for d in valid_cbd_data])
+        tick_lons = np.array([d["lon"] for d in valid_cbd_data])
+
+        # Create interpolation functions
+        try:
+            lat_interp = interp1d(
+                tick_x_coords,
+                tick_lats,
+                kind="linear",
+                bounds_error=False,
+                fill_value="extrapolate",
+            )
+            lon_interp = interp1d(
+                tick_x_coords,
+                tick_lons,
+                kind="linear",
+                bounds_error=False,
+                fill_value="extrapolate",
+            )
+
+            # Interpolate for all x-pixels
+            interpolated_lats = lat_interp(x_pixels)
+            interpolated_lons = lon_interp(x_pixels)
+
+            # Only keep interpolations within reasonable bounds
+            x_min, x_max = np.min(tick_x_coords), np.max(tick_x_coords)
+            valid_range = (x_pixels >= x_min) & (x_pixels <= x_max)
+
+            latitudes[valid_range] = interpolated_lats[valid_range]
+            longitudes[valid_range] = interpolated_lons[valid_range]
+
+            # Mark CBD positions where tick marks exist
+            for data in valid_cbd_data:
+                closest_pixel_idx = np.argmin(np.abs(x_pixels - data["x_pos"]))
+                cbd_numbers[closest_pixel_idx] = data["cbd"]
+
+            print(f"Interpolated coordinates for {np.sum(valid_range)} pixels")
+
+        except Exception as e:
+            print(f"Error in coordinate interpolation: {e}")
+
+        return cbd_numbers, latitudes, longitudes
+
     def process_image(
         self, image_path_str, output_dir_str, approx_x_pip, nav_df=None, nav_path=None
     ):
+        """
+        Main image processing method with enhanced functionality.
+        """
         image_path_obj = Path(image_path_str)
         self.base_filename = image_path_obj.stem
         self.output_dir = Path(output_dir_str)
@@ -126,10 +371,12 @@ class ZScopeProcessor:
         debug_subdir_name = output_params_config.get(
             "debug_output_directory", "debug_output"
         )
+
         current_output_params = {
             "debug_output_directory": str(self.output_dir / debug_subdir_name),
             "figure_save_dpi": output_params_config.get("figure_save_dpi", 300),
         }
+
         Path(current_output_params["debug_output_directory"]).mkdir(
             parents=True, exist_ok=True
         )
@@ -140,11 +387,13 @@ class ZScopeProcessor:
         self.image_np = load_and_preprocess_image(
             image_path_str, self.config.get("preprocessing_params", {})
         )
+
         if self.image_np is None:
             print(
                 f"ERROR: Failed to load or preprocess image {image_path_str}. Aborting."
             )
             return False
+
         img_height, img_width = self.image_np.shape
         print(f"INFO: Image dimensions: {img_width}x{img_height}")
 
@@ -162,6 +411,7 @@ class ZScopeProcessor:
             safety_margin=artifact_params.get("safety_margin", 20),
             visualize=artifact_params.get("visualize_film_artifact_boundaries", False),
         )
+
         print(
             f"INFO: Film artifact boundaries determined: Top={self.data_top_abs}, Bottom={self.data_bottom_abs}"
         )
@@ -175,6 +425,7 @@ class ZScopeProcessor:
             self.data_bottom_abs,
             tx_pulse_params=tx_pulse_params_config,
         )
+
         print(
             f"INFO: Transmitter pulse detected at Y-pixel (absolute): {self.transmitter_pulse_y_abs}"
         )
@@ -189,16 +440,19 @@ class ZScopeProcessor:
         pip_detection_strip_config = self.config.get("pip_detection_params", {}).get(
             "approach_1", {}
         )
+
         strip_center_for_z_boundary = approx_x_pip
         z_boundary_vslice_width = pip_detection_strip_config.get(
             "z_boundary_vslice_width_px", 10
         )
+
         v_slice_x_start = max(
             0, strip_center_for_z_boundary - z_boundary_vslice_width // 2
         )
         v_slice_x_end = min(
             img_width, strip_center_for_z_boundary + z_boundary_vslice_width // 2
         )
+
         if v_slice_x_start >= v_slice_x_end:
             print(
                 f"WARNING: Cannot extract vertical slice for Z-boundary detection at X={strip_center_for_z_boundary}. Using full width."
@@ -206,14 +460,14 @@ class ZScopeProcessor:
             vertical_slice_for_z = self.image_np
         else:
             vertical_slice_for_z = self.image_np[:, v_slice_x_start:v_slice_x_end]
+
         z_boundary_params_config = self.config.get(
             "zscope_boundary_detection_params", {}
         )
         z_boundary_y_for_pip = detect_zscope_boundary(
-            vertical_slice_for_z,
-            self.data_top_abs,
-            self.data_bottom_abs,
+            vertical_slice_for_z, self.data_top_abs, self.data_bottom_abs
         )
+
         print(
             f"INFO: Z-scope boundary for pip strip detected at Y-pixel (absolute): {z_boundary_y_for_pip}"
         )
@@ -230,7 +484,6 @@ class ZScopeProcessor:
         )
 
         calpip_state_path = self.output_dir / "calpip_state.json"
-
         if not self.best_pip_details:
             print("WARNING: Calibration pip not detected in this image.")
             if hasattr(self, "last_pip_details") and self.last_pip_details:
@@ -264,6 +517,7 @@ class ZScopeProcessor:
         pip_interval_us = self.physics_constants.get(
             "calibration_pip_interval_microseconds", 2.0
         )
+
         try:
             self.pixels_per_microsecond = calculate_pixels_per_microsecond(
                 self.best_pip_details["mean_spacing"], pip_interval_us
@@ -271,6 +525,7 @@ class ZScopeProcessor:
         except ValueError as e:
             print(f"ERROR calculating pixels_per_microsecond: {e}")
             return False
+
         print(
             f"INFO: Calculated pixels per microsecond: {self.pixels_per_microsecond:.3f}"
         )
@@ -289,22 +544,21 @@ class ZScopeProcessor:
             tx_pulse_y_rel = self.transmitter_pulse_y_abs - self.data_top_abs
             z_boundary_y_abs_for_echo_search = self.data_bottom_abs
             z_boundary_y_rel = z_boundary_y_abs_for_echo_search - self.data_top_abs
+
             echo_tracing_config = self.config.get("echo_tracing_params", {})
             surface_config = echo_tracing_config.get("surface_detection", {})
             surface_y_rel = detect_surface_echo(
-                valid_data_crop,
-                tx_pulse_y_rel,
-                surface_config,
+                valid_data_crop, tx_pulse_y_rel, surface_config
             )
+
             if np.any(np.isfinite(surface_y_rel)):
                 self.detected_surface_y_abs = surface_y_rel + self.data_top_abs
+
                 bed_config = echo_tracing_config.get("bed_detection", {})
                 bed_y_rel = detect_bed_echo(
-                    valid_data_crop,
-                    surface_y_rel,
-                    z_boundary_y_rel,
-                    bed_config,
+                    valid_data_crop, surface_y_rel, z_boundary_y_rel, bed_config
                 )
+
                 if np.any(np.isfinite(bed_y_rel)):
                     self.detected_bed_y_abs = bed_y_rel + self.data_top_abs
                 else:
@@ -329,6 +583,7 @@ class ZScopeProcessor:
         time_vis_params_config = self.config.get(
             "time_calibration_visualization_params", {}
         )
+
         self.calibrated_fig, self.calibrated_ax, self.time_axis = (
             create_time_calibrated_zscope(
                 self.image_np,
@@ -346,16 +601,20 @@ class ZScopeProcessor:
                 nav_df=nav_df,
                 nav_path=nav_path,
                 main_output_dir=self.output_dir,
+                processor_ref=self,  # Pass processor reference for CBD tick storage
             )
         )
+
         if self.calibrated_fig is None:
             print("ERROR: Failed to create time-calibrated Z-scope plot.")
             return False
 
+        # Export basic ice measurements CSV
         self.export_ice_measurements(self.output_dir)
 
         print(f"\n--- Processing for {self.base_filename} complete. ---")
         print(
             f"INFO: Main calibrated plot saved to {self.output_dir / (self.base_filename + '_picked.png')}"
         )
+
         return True
