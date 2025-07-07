@@ -60,20 +60,6 @@ This package enables researchers to:
 - **Validate climate models** with long-term observational data
 - **Study ice shelf dynamics** and stability mechanisms
 
-### Technical Capabilities
-
-- Processing of large TIFF radar images (~120MB each, 38,000 x 2,400 pixels)
-- Automated surface and bed echo detection
-- Time-calibrated depth measurements
-- Enhanced coordinate interpolation for geospatial analysis
-
-### Research Focus Areas
-
-- Ice sheet dynamics and evolution
-- Radar glaciology and remote sensing
-- Climate change impacts on polar regions
-- Historical data preservation and analysis
-
 ## 📚 Getting Started
 
 ### For Researchers
