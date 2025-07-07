@@ -3,7 +3,7 @@
   <span style="font-size:2em; vertical-align: middle;"></span>
 </p>
 
-# FrozenLegacies: Investigating Four Decades of Change Beneath Antarctica's Ross Ice Shelf
+# Frozen Legacies: Investigating Decades of Change Beneath Antarctica
 
 **Frozen Legacies** brings together newly digitized radar film from historic 1970s Antarctic flights and today's advanced airborne surveys to reveal how the Ross Ice Shelf has changed over nearly 50 years. By peering beneath the ice with radar, our team is uncovering the story of Antarctica's largest ice shelf—helping scientists, educators, and the public understand the frozen frontier's past, present, and future.
 
