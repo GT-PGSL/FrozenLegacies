@@ -19,7 +19,7 @@
   - [Batch Processing](#batch-processing)
 - [Configuration](#configuration)
 - [Core Processing Pipeline](#core-processing-pipeline)
-- [Output Files](#output)
+- [Output Files](#output-files)
   
 ---
 
