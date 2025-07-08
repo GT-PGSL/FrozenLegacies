@@ -78,7 +78,7 @@ pip install -r requirements.txt
 Process a single Z-scope image:
 
   ```
-  python main.py <image_path> <output_dir> --nav_file <navigation_file>
+  python main.py <image_path> --nav_file <navigation_file> <output_dir>
   ```
 
   Replace `<image_path>` with your radar image file (e.g., `.tiff`, `.png`, `.jpg`), `<output_dir>` with the desired output directory, and `<navigation_file>` with the flight track navigation file (e.g., `.csv`). 
@@ -86,7 +86,7 @@ Process a single Z-scope image:
   Example:
 
   ```
-  python main.py data/F103-C0455_0467.tiff output/ --nav_file data/103_nav.csv
+  python main.py data/F103-C0455_0467.tiff --nav_file data/103_nav.csv output/103
   ```
 
 ### Batch Processing
@@ -100,7 +100,7 @@ Replace `--batch_dir` with the folder directory containing multiple .tiff files 
  Example:
 
   ```
-  python main.py --batch_dir data/103 output/ --nav_file data/103_nav.csv output/103
+  python main.py --batch_dir data/103 --nav_file data/103_nav.csv output/103
   ```
 
 
