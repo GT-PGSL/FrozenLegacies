@@ -82,7 +82,7 @@ Process a single Z-scope image:
   Example:
 
   ```
-  python main.py data/echogram_001.tiff output/ --nav_file 001_nav.csv
+  python main.py data/F103-C0455_0467.tiff output/ --nav_file data/103_nav.csv
   ```
 
 ### Batch Processing
@@ -92,6 +92,13 @@ Process multiple images in a directory:
 python main.py --batch_dir <input dir> --nav_file <navigation_file> <output_dir>
 ```
 Replace `--batch_dir` with the folder directory containing multiple .tiff files for batch processing. 
+
+ Example:
+
+  ```
+  python main.py --batch_dir data/103 output/ --nav_file data/103_nav.csv output/103
+  ```
+
 
 ---
 
