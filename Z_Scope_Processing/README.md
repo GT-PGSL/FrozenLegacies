@@ -51,16 +51,20 @@
 1. Clone the repository:
 ```
 git clone https://github.com/GT-PGSL/FrozenLegacies.git
+```
+
+2. Go the project directory (❗IMPORTANT!): 
+```
 cd FrozenLegacies/Z_Scope_Processing
 ```
 
-2. (Optional but recommended) Create and activate a virtual environment:
+3. (Optional but recommended) Create and activate a virtual environment:
 ```
 python3 -m venv venv
 source venv/bin/activate
 ```
 
-3. Install dependencies:
+4. Install dependencies:
 ```
 pip install -r requirements.txt
 ```
