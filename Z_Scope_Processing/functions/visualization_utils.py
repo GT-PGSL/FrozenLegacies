@@ -177,13 +177,11 @@ class CBDTickSelector:
         return refined_positions
 
     def start_selection(self, title="Select First Two CBD Tick Marks"):
-        """Start interactive selection with proper TOP sprocket hole removal."""
+        """Start interactive selection with crosshair cursor and improved visuals."""
         height, width = self.image_full.shape
 
         # REMOVE the top portion where sprocket holes are located
         sprocket_height = int(height * self.sprocket_removal_ratio)
-
-        # START the search region BELOW the sprocket holes
         search_start = sprocket_height
         search_height = int(height * self.search_height_ratio)
         search_end = search_start + search_height
@@ -213,11 +211,37 @@ class CBDTickSelector:
             extent=[0, width, search_end, search_start],
         )
 
+        # Initialize crosshair lines (initially invisible)
+        self.crosshair_v = self.ax.axvline(
+            x=0,
+            color="yellow",
+            linestyle="-",
+            linewidth=1,
+            alpha=0.8,
+            visible=False,
+            zorder=20,
+        )
+        self.crosshair_h = self.ax.axhline(
+            y=0,
+            color="yellow",
+            linestyle="-",
+            linewidth=1,
+            alpha=0.8,
+            visible=False,
+            zorder=20,
+        )
+
+        # Connect mouse motion event for crosshair
+        self.motion_cid = self.fig.canvas.mpl_connect(
+            "motion_notify_event", self._on_mouse_move
+        )
+
+        # Enhanced title with crosshair instructions
         self.ax.set_title(
             f"{title}\n"
-            "ENHANCED VIEW - Sprocket holes at TOP removed + Local Image Recognition\n"
+            "ENHANCED VIEW - Crosshair cursor shows precise alignment\n"
             "CBD tick marks shown in clean region below sprocket holes\n"
-            "Click on the leftmost CBD tick mark first, then the next one to the right",
+            "Yellow crosshair follows cursor for precise positioning",
             fontsize=16,
             fontweight="bold",
             pad=20,
@@ -233,11 +257,12 @@ class CBDTickSelector:
         self.ax.set_xlim(0, width)
         self.ax.set_ylim(search_end, search_start)
 
-        # Clear, focused instructions - positioned to avoid covering tick marks
+        # Updated instructions with crosshair info
         self.ax.text(
             0.98,
             0.98,
             "ENHANCED CBD TICK MARK SELECTION:\n"
+            "• Yellow crosshair shows precise cursor position\n"
             "• Sprocket holes at TOP completely removed\n"
             f"• Search starts at Y={search_start} (below sprocket holes)\n"
             "• Uses uniform spacing + local image recognition\n"
@@ -265,8 +290,27 @@ class CBDTickSelector:
 
         return self.selected_points
 
+    def _on_mouse_move(self, event):
+        """Handle mouse movement to update crosshair position."""
+        if event.inaxes == self.ax:
+            # Update crosshair position
+            self.crosshair_v.set_xdata([event.xdata])
+            self.crosshair_h.set_ydata([event.ydata])
+
+            # Make crosshair visible
+            self.crosshair_v.set_visible(True)
+            self.crosshair_h.set_visible(True)
+
+            # Redraw only the crosshair for better performance
+            self.fig.canvas.draw_idle()
+        else:
+            # Hide crosshair when mouse leaves the plot area
+            self.crosshair_v.set_visible(False)
+            self.crosshair_h.set_visible(False)
+            self.fig.canvas.draw_idle()
+
     def _on_click(self, event):
-        """Handle mouse click events with proper coordinate adjustment."""
+        """Handle mouse click events with improved visual markers."""
         if event.inaxes != self.ax:
             return
 
@@ -274,7 +318,7 @@ class CBDTickSelector:
             x, y = event.xdata, event.ydata
             self.selected_points.append((int(x), int(y)))
 
-            # Enhanced visual markers
+            # Improved visual markers - much thinner and less intrusive
             color = "red" if len(self.selected_points) == 1 else "blue"
             label = (
                 "First CBD Tick"
@@ -282,36 +326,44 @@ class CBDTickSelector:
                 else "Second CBD Tick"
             )
 
-            # Large, highly visible markers
+            # REDUCED marker size and line thickness for less intrusive appearance
             self.ax.plot(
                 x,
                 y,
                 "o",
                 color=color,
-                markersize=25,
-                markeredgewidth=5,
+                markersize=12,  # Reduced from 25
+                markeredgewidth=2,  # Reduced from 5
                 markeredgecolor="white",
                 markerfacecolor=color,
                 label=label,
                 zorder=15,
+                alpha=0.8,  # Added transparency
             )
 
-            # Prominent vertical line
+            # THINNER vertical line - much less intrusive
             self.ax.axvline(
-                x=x, color=color, linestyle="-", alpha=0.95, linewidth=5, zorder=14
+                x=x,
+                color=color,
+                linestyle="-",
+                alpha=0.6,  # Reduced from 0.95
+                linewidth=2,  # Reduced from 5
+                zorder=14,
             )
 
-            # Enhanced annotation with arrow
+            # Smaller, less prominent annotation
             self.ax.annotate(
-                f"{label}\nX: {int(x)}, Y: {int(y)}",
+                f"{label}\nX: {int(x)}",  # Simplified text
                 xy=(x, y),
-                xytext=(25, 25),
+                xytext=(15, 15),  # Reduced offset
                 textcoords="offset points",
-                bbox=dict(boxstyle="round,pad=1.0", fc=color, alpha=0.95),
-                fontsize=16,
+                bbox=dict(
+                    boxstyle="round,pad=0.3", fc=color, alpha=0.7
+                ),  # Smaller, more transparent
+                fontsize=12,  # Reduced from 16
                 color="white",
                 fontweight="bold",
-                arrowprops=dict(arrowstyle="->", color=color, lw=4),
+                arrowprops=dict(arrowstyle="->", color=color, lw=2),  # Thinner arrow
                 zorder=16,
             )
 
@@ -319,7 +371,7 @@ class CBDTickSelector:
                 self._calculate_all_ticks()
                 self._show_calculated_ticks()
 
-            self.ax.legend(fontsize=14, loc="upper right")
+            self.ax.legend(fontsize=12, loc="upper right")
             self.fig.canvas.draw()
 
     def _calculate_all_ticks(self):
@@ -363,52 +415,53 @@ class CBDTickSelector:
             print(f"Max adjustment: {np.max(adjustments):.1f} pixels")
 
     def _show_calculated_ticks(self):
-        """Show both approximate and refined tick positions on the plot."""
+        """Show both approximate and refined tick positions with improved visuals."""
         for i, (approx_x, refined_x) in enumerate(
             zip(self.calculated_ticks, self.refined_ticks)
         ):
             if i < 2:  # Skip the manually selected ones
                 continue
 
-            # Show approximate position (gray, dashed)
+            # Show approximate position (lighter, thinner)
             if 0 <= approx_x < self.image_full.shape[1]:
                 self.ax.axvline(
                     x=approx_x,
                     color="gray",
                     linestyle="--",
-                    alpha=0.5,
-                    linewidth=2,
+                    alpha=0.3,  # More transparent
+                    linewidth=1,  # Thinner
                     zorder=11,
                 )
 
-            # Show refined position (green, solid)
+            # Show refined position (green, but thinner)
             if 0 <= refined_x < self.image_full.shape[1]:
                 self.ax.axvline(
                     x=refined_x,
                     color="green",
                     linestyle="-",
-                    alpha=0.9,
-                    linewidth=3,
+                    alpha=0.7,  # Slightly transparent
+                    linewidth=1.5,  # Thinner than before
                     zorder=13,
                 )
 
-                # Add tick labels for every other tick
-                if i % 2 == 0:
-                    self.ax.text(
-                        refined_x,
-                        self.search_start
-                        + (self.search_end - self.search_start) * 0.15,
-                        f"T{i + 1}",
-                        ha="center",
-                        va="bottom",
-                        fontsize=14,
-                        color="green",
-                        fontweight="bold",
-                        zorder=17,
-                        bbox=dict(boxstyle="round,pad=0.4", fc="white", alpha=0.95),
-                    )
+            # Smaller tick labels
+            if i % 2 == 0:
+                self.ax.text(
+                    refined_x,
+                    self.search_start + (self.search_end - self.search_start) * 0.15,
+                    f"T{i + 1}",
+                    ha="center",
+                    va="bottom",
+                    fontsize=10,  # Reduced from 14
+                    color="green",
+                    fontweight="bold",
+                    zorder=17,
+                    bbox=dict(
+                        boxstyle="round,pad=0.2", fc="white", alpha=0.8
+                    ),  # Smaller padding
+                )
 
-        # Update title with comprehensive results
+        # Update title with results
         spacing = abs(self.selected_points[1][0] - self.selected_points[0][0])
         avg_adjustment = np.mean(
             [abs(r - a) for r, a in zip(self.refined_ticks, self.calculated_ticks)]
@@ -418,7 +471,7 @@ class CBDTickSelector:
             f"CBD Tick Mark Selection Complete (ENHANCED)\n"
             f"{len(self.refined_ticks)} ticks: {spacing}px spacing + local refinement\n"
             f"Gray=Approximate, Green=Refined (avg adjustment: {avg_adjustment:.1f}px)\n"
-            f"Sprocket holes removed (Y=0 to Y={self.sprocket_height})",
+            f"Yellow crosshair provides precise alignment feedback",
             fontsize=16,
             fontweight="bold",
             pad=20,
@@ -429,6 +482,16 @@ class CBDTickSelector:
     def get_tick_positions(self):
         """Return the refined tick positions."""
         return self.refined_ticks if self.refined_ticks else self.calculated_ticks
+
+    def cleanup(self):
+        """Clean up event connections to prevent memory leaks."""
+        if hasattr(self, "cid") and self.cid is not None:
+            self.fig.canvas.mpl_disconnect(self.cid)
+            self.cid = None
+
+        if hasattr(self, "motion_cid") and self.motion_cid is not None:
+            self.fig.canvas.mpl_disconnect(self.motion_cid)
+            self.motion_cid = None
 
 
 def manual_cbd_tick_selection(
