@@ -95,7 +95,7 @@ Process multiple images in a directory:
 ```
 python main.py --batch_dir <input dir> --nav_file <navigation_file> <output_dir>
 ```
-Replace `--batch_dir` with the folder directory containing multiple .tiff files for batch processing. 
+Replace `<input dir>` with the folder directory containing multiple .tiff files for batch processing. 
 
  Example:
 
