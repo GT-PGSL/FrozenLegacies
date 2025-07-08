@@ -177,7 +177,7 @@ class CBDTickSelector:
         return refined_positions
 
     def start_selection(self, title="Select First Two CBD Tick Marks"):
-        """Start interactive selection with crosshair cursor and improved visuals."""
+        """Start interactive selection with crosshair cursor."""
         height, width = self.image_full.shape
 
         # REMOVE the top portion where sprocket holes are located
@@ -211,7 +211,7 @@ class CBDTickSelector:
             extent=[0, width, search_end, search_start],
         )
 
-        # Initialize crosshair lines (initially invisible)
+        # Initialize crosshair lines
         self.crosshair_v = self.ax.axvline(
             x=0,
             color="yellow",
@@ -238,10 +238,7 @@ class CBDTickSelector:
 
         # Enhanced title with crosshair instructions
         self.ax.set_title(
-            f"{title}\n"
-            "ENHANCED VIEW - Crosshair cursor shows precise alignment\n"
-            "CBD tick marks shown in clean region below sprocket holes\n"
-            "Yellow crosshair follows cursor for precise positioning",
+            f"{title}\nClick to select first CBD tick mark\n",
             fontsize=16,
             fontweight="bold",
             pad=20,
@@ -261,14 +258,9 @@ class CBDTickSelector:
         self.ax.text(
             0.98,
             0.98,
-            "ENHANCED CBD TICK MARK SELECTION:\n"
-            "• Yellow crosshair shows precise cursor position\n"
-            "• Sprocket holes at TOP completely removed\n"
-            f"• Search starts at Y={search_start} (below sprocket holes)\n"
-            "• Uses uniform spacing + local image recognition\n"
+            "CBD TICK MARK SELECTION:\n"
             "• Click on leftmost CBD tick mark\n"
             "• Click on next tick mark to the right\n"
-            "• CBD tick marks are the dark vertical lines\n"
             "• Close window when done",
             transform=self.ax.transAxes,
             fontsize=12,
@@ -468,7 +460,7 @@ class CBDTickSelector:
         )
 
         self.ax.set_title(
-            f"CBD Tick Mark Selection Complete (ENHANCED)\n"
+            f"CBD Tick Mark Selection Complete \n"
             f"{len(self.refined_ticks)} ticks: {spacing}px spacing + local refinement\n"
             f"Gray=Approximate, Green=Refined (avg adjustment: {avg_adjustment:.1f}px)\n"
             f"Yellow crosshair provides precise alignment feedback",
