@@ -81,7 +81,7 @@ Process a single Z-scope image:
   python main.py <image_path> --nav_file <navigation_file> <output_dir>
   ```
 
-  Replace `<image_path>` with your radar image file (e.g., `.tiff`, `.png`, `.jpg`), `<output_dir>` with the desired output directory, and `<navigation_file>` with the flight track navigation file (e.g., `.csv`). 
+  Replace `<image_path>` with your radar image file (e.g., `.tiff`, `.png`, `.jpg`),`<navigation_file>` with the flight track navigation file (e.g., `.csv`), and `<output_dir>` with the desired output directory. 
   
   Example:
 
