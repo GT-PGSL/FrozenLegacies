@@ -593,9 +593,8 @@ def validate_manual_selection_enhanced(
                 )
 
     ax1.set_title(
-        f"ENHANCED Manual CBD Tick Selection Results: {base_filename}\n"
-        f"{len(tick_positions)} ticks detected with local image recognition refinement\n"
-        "Sprocket holes completely removed - Focused view with refined positions",
+        f"Manual CBD Tick Selection Results: {base_filename}\n"
+        f"{len(tick_positions)} ticks detected with local image recognition refinement\n",
         fontsize=16,
     )
     ax1.set_xlabel("X Position (pixels)", fontsize=14)
@@ -635,7 +634,7 @@ def validate_manual_selection_enhanced(
             label=f"Mean Spacing: {np.mean(spacings):.1f} pixels",
         )
         ax2.set_title(
-            f"Spacing Between Adjacent CBD Ticks (Enhanced with Local Refinement)\n"
+            f"Spacing Between Adjacent CBD Ticks\n"
             f"Standard Deviation: {np.std(spacings):.1f} pixels (Lower is better)",
             fontsize=16,
         )
