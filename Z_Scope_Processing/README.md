@@ -53,7 +53,7 @@
 git clone https://github.com/GT-PGSL/FrozenLegacies.git
 ```
 
-2. (❗Important) Go the project directory : 
+2. (❗Important) Go the project directory:  
 ```
 cd FrozenLegacies/Z_Scope_Processing
 ```
