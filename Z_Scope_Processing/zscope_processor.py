@@ -3,6 +3,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from scipy.interpolate import interp1d
+import cv2
+import matplotlib.pyplot as plt
 
 from functions.image_utils import load_and_preprocess_image
 from functions.artifact_detection import (
@@ -60,6 +62,7 @@ class ZScopeProcessor:
         self.output_dir = None
         self.last_pip_details = None
         self.calculated_ticks = None  # For storing CBD tick positions
+        self._parameters_were_optimized = False  # Track if parameters were updated
 
     def save_calpip_state(self, state_path):
         import numpy as np
@@ -332,15 +335,294 @@ class ZScopeProcessor:
 
         return cbd_numbers, latitudes, longitudes
 
+    def save_optimized_parameters(self, output_dir):
+        """Save optimized parameters for use in subsequent images."""
+        params_file = Path(output_dir) / "optimized_echo_params.json"
+
+        # Extract current echo tracing parameters
+        echo_params = self.config.get("echo_tracing_params", {})
+
+        # Add metadata
+        optimized_data = {
+            "timestamp": str(pd.Timestamp.now()),
+            "source_image": self.base_filename,
+            "echo_tracing_params": echo_params,
+            "optimization_method": "user_guided_search_parameters",
+            "flight_sequence": True,
+        }
+
+        with open(params_file, "w") as f:
+            json.dump(optimized_data, f, indent=4)
+
+        print(f"INFO: Saved optimized parameters to {params_file}")
+
+    def load_previous_optimized_parameters(self, output_dir):
+        """Load optimized parameters from previous image processing."""
+        params_file = Path(output_dir) / "optimized_echo_params.json"
+
+        if params_file.exists():
+            try:
+                with open(params_file, "r") as f:
+                    optimized_data = json.load(f)
+
+                # Update current configuration with optimized parameters
+                if "echo_tracing_params" in optimized_data:
+                    self.config["echo_tracing_params"].update(
+                        optimized_data["echo_tracing_params"]
+                    )
+                    print(f"INFO: Loaded optimized parameters from previous processing")
+                    print(
+                        f"INFO: Source: {optimized_data.get('source_image', 'unknown')}"
+                    )
+                    return True
+            except Exception as e:
+                print(f"WARNING: Could not load optimized parameters: {e}")
+
+        return False
+
+    def _show_automatic_results_for_approval(self, valid_data_crop):
+        """
+        Display automatic detection results and get user approval.
+
+        Returns:
+            bool: True if user is satisfied, False if they want to optimize parameters
+        """
+        fig, ax = plt.subplots(figsize=(24, 12))
+
+        # Display image with automatic detection results
+        enhanced = cv2.createCLAHE(clipLimit=3.0).apply(valid_data_crop)
+        ax.imshow(enhanced, cmap="gray", aspect="auto")
+
+        # Plot automatic traces
+        x_coords = np.arange(len(self.detected_surface_y_abs))
+
+        # Surface trace
+        surface_y_rel = self.detected_surface_y_abs - self.data_top_abs
+        valid_surface = np.isfinite(surface_y_rel)
+        if np.any(valid_surface):
+            ax.plot(
+                x_coords[valid_surface],
+                surface_y_rel[valid_surface],
+                "cyan",
+                linewidth=2,
+                label="Automatic Surface Detection",
+                alpha=0.8,
+            )
+
+        # Bed trace
+        bed_y_rel = self.detected_bed_y_abs - self.data_top_abs
+        valid_bed = np.isfinite(bed_y_rel)
+        if np.any(valid_bed):
+            ax.plot(
+                x_coords[valid_bed],
+                bed_y_rel[valid_bed],
+                "orange",
+                linewidth=2,
+                label="Automatic Bed Detection",
+                alpha=0.8,
+            )
+
+        # Calculate and display quality metrics
+        surface_coverage = (
+            np.sum(valid_surface) / len(surface_y_rel) * 100
+            if len(surface_y_rel) > 0
+            else 0
+        )
+        bed_coverage = (
+            np.sum(valid_bed) / len(bed_y_rel) * 100 if len(bed_y_rel) > 0 else 0
+        )
+
+        ax.set_title(
+            f"Automatic Echo Detection Results\n"
+            f"Surface Coverage: {surface_coverage:.1f}% | Bed Coverage: {bed_coverage:.1f}%\n"
+            f"Review results and decide if parameter optimization is needed",
+            fontsize=16,
+            fontweight="bold",
+        )
+        ax.legend()
+
+        # Add instruction text
+        ax.text(
+            0.02,
+            0.02,
+            "AUTOMATIC DETECTION REVIEW:\n"
+            "• Cyan = Automatic surface detection\n"
+            "• Orange = Automatic bed detection\n"
+            "• Close window to continue",
+            transform=ax.transAxes,
+            fontsize=12,
+            verticalalignment="bottom",
+            bbox=dict(boxstyle="round,pad=0.5", facecolor="lightblue", alpha=0.9),
+        )
+
+        plt.tight_layout()
+        plt.show()
+
+        # Get user satisfaction feedback
+        while True:
+            user_input = (
+                input(
+                    "\nAre you satisfied with the automatic echo detection results?\n"
+                    "Enter 'y' to proceed to CBD selection, 'n' to optimize parameters: "
+                )
+                .strip()
+                .lower()
+            )
+
+            if user_input in ["y", "yes"]:
+                return True
+            elif user_input in ["n", "no"]:
+                return False
+            else:
+                print("Please enter 'y' for yes or 'n' for no")
+
+    def _run_user_guided_calibration(self, valid_data_crop):
+        """
+        Run user-guided calibration workflow.
+
+        Returns:
+            dict: Optimized parameters or None if cancelled
+        """
+        from functions.interactive_tools import EchoPointSelector
+        from functions.echo_calibration import analyze_echo_points
+        from functions.echo_validation import EchoValidationInterface
+
+        # Phase 1: User selects representative points
+        print(
+            "Please select 5 representative points each for surface and bed echoes..."
+        )
+        print("Click directly on clear echo peaks for more accurate parameter tuning.")
+
+        point_selector = EchoPointSelector(
+            valid_data_crop,
+            title="Select Echo Calibration Points - Surface and Bed Echoes",
+        )
+
+        surface_points, bed_points = point_selector.start_selection()
+
+        if not surface_points or not bed_points:
+            print("Insufficient point selections - cancelling guided calibration")
+            return None
+
+        print(
+            f"Selected {len(surface_points)} surface points and {len(bed_points)} bed points"
+        )
+
+        # Phase 2: Analyze points and optimize parameters
+        print("Analyzing selected points to optimize detection parameters...")
+
+        optimized_params = analyze_echo_points(
+            valid_data_crop, surface_points, bed_points
+        )
+
+        return optimized_params
+
+    def _update_search_parameters(self, optimized_params):
+        """Update configuration with optimized search parameters only."""
+        echo_tracing_config = self.config.get("echo_tracing_params", {})
+
+        # Apply optimized surface search parameters only
+        if "surface_detection" in optimized_params:
+            surface_config = echo_tracing_config.get("surface_detection", {})
+
+            # ONLY update search window parameters
+            search_params = optimized_params["surface_detection"]
+            if "search_start_offset_px" in search_params:
+                surface_config["search_start_offset_px"] = search_params[
+                    "search_start_offset_px"
+                ]
+            if "search_depth_px" in search_params:
+                surface_config["search_depth_px"] = search_params["search_depth_px"]
+
+            echo_tracing_config["surface_detection"] = surface_config
+            print(f"Updated surface search parameters: {search_params}")
+
+        # Apply optimized bed search parameters only
+        if "bed_detection" in optimized_params:
+            bed_config = echo_tracing_config.get("bed_detection", {})
+
+            # ONLY update search window parameters
+            search_params = optimized_params["bed_detection"]
+            if "search_start_offset_px" in search_params:
+                bed_config["search_start_offset_px"] = search_params[
+                    "search_start_offset_px"
+                ]
+            if "search_depth_px" in search_params:
+                bed_config["search_depth_px"] = search_params["search_depth_px"]
+
+            echo_tracing_config["bed_detection"] = bed_config
+            print(f"Updated bed search parameters: {search_params}")
+
+        # Update the main config
+        self.config["echo_tracing_params"] = echo_tracing_config
+        self._parameters_were_optimized = True
+
+        print("Search window parameters optimized based on your point selections!")
+        print("Peak detection and enhancement parameters remain at default values.")
+
+    def _run_default_echo_detection(self):
+        """Run default automatic echo detection without user guidance."""
+        if (
+            self.image_np is not None
+            and self.data_top_abs is not None
+            and self.data_bottom_abs is not None
+            and self.transmitter_pulse_y_abs is not None
+            and self.best_pip_details is not None
+            and self.pixels_per_microsecond is not None
+        ):
+            valid_data_crop = self.image_np[self.data_top_abs : self.data_bottom_abs, :]
+            crop_height, crop_width = valid_data_crop.shape
+            tx_pulse_y_rel = self.transmitter_pulse_y_abs - self.data_top_abs
+            z_boundary_y_abs_for_echo_search = self.data_bottom_abs
+            z_boundary_y_rel = z_boundary_y_abs_for_echo_search - self.data_top_abs
+
+            # Use DEFAULT configuration parameters (no optimization)
+            echo_tracing_config = self.config.get("echo_tracing_params", {})
+            surface_config = echo_tracing_config.get("surface_detection", {})
+
+            surface_y_rel = detect_surface_echo(
+                valid_data_crop, tx_pulse_y_rel, surface_config
+            )
+
+            if np.any(np.isfinite(surface_y_rel)):
+                self.detected_surface_y_abs = surface_y_rel + self.data_top_abs
+
+                bed_config = echo_tracing_config.get("bed_detection", {})
+                bed_y_rel = detect_bed_echo(
+                    valid_data_crop, surface_y_rel, z_boundary_y_rel, bed_config
+                )
+
+                if np.any(np.isfinite(bed_y_rel)):
+                    self.detected_bed_y_abs = bed_y_rel + self.data_top_abs
+                else:
+                    self.detected_bed_y_abs = np.full(valid_data_crop.shape[1], np.nan)
+            else:
+                self.detected_surface_y_abs = np.full(valid_data_crop.shape[1], np.nan)
+                self.detected_bed_y_abs = np.full(valid_data_crop.shape[1], np.nan)
+        else:
+            width_for_nan_fallback = 100
+            if self.image_np is not None:
+                width_for_nan_fallback = self.image_np.shape[1]
+            self.detected_surface_y_abs = np.full(width_for_nan_fallback, np.nan)
+            self.detected_bed_y_abs = np.full(width_for_nan_fallback, np.nan)
+
     def process_image(
         self, image_path_str, output_dir_str, approx_x_pip, nav_df=None, nav_path=None
     ):
         """
-        Main image processing method with enhanced functionality.
+        Main image processing method with adaptive parameter learning and automatic-first workflow.
         """
         image_path_obj = Path(image_path_str)
         self.base_filename = image_path_obj.stem
         self.output_dir = Path(output_dir_str)
+
+        # NEW: Load optimized parameters from previous processing
+        if self.load_previous_optimized_parameters(self.output_dir):
+            print(
+                "INFO: Using optimized parameters from previous image in flight sequence"
+            )
+        else:
+            print("INFO: Using default parameters for echo detection")
 
         output_params_config = self.config.get("output_params", {})
         debug_subdir_name = output_params_config.get(
@@ -505,54 +787,92 @@ class ZScopeProcessor:
             f"INFO: Calculated pixels per microsecond: {self.pixels_per_microsecond:.3f}"
         )
 
-        print("\nStep 6.5: Automatic echo tracing...")
-        if (
-            self.image_np is not None
-            and self.data_top_abs is not None
-            and self.data_bottom_abs is not None
-            and self.transmitter_pulse_y_abs is not None
-            and self.best_pip_details is not None
-            and self.pixels_per_microsecond is not None
-        ):
-            valid_data_crop = self.image_np[self.data_top_abs : self.data_bottom_abs, :]
-            crop_height, crop_width = valid_data_crop.shape
-            tx_pulse_y_rel = self.transmitter_pulse_y_abs - self.data_top_abs
-            z_boundary_y_abs_for_echo_search = self.data_bottom_abs
-            z_boundary_y_rel = z_boundary_y_abs_for_echo_search - self.data_top_abs
+        print("\nStep 6.5: Automatic Echo Detection with Optional User Guidance...")
 
-            echo_tracing_config = self.config.get("echo_tracing_params", {})
-            surface_config = echo_tracing_config.get("surface_detection", {})
-            surface_y_rel = detect_surface_echo(
-                valid_data_crop, tx_pulse_y_rel, surface_config
+        # Phase 1: Run automatic detection with current parameters
+        print("Running automatic echo detection with current parameters...")
+
+        valid_data_crop = self.image_np[self.data_top_abs : self.data_bottom_abs, :]
+        crop_height, crop_width = valid_data_crop.shape
+        tx_pulse_y_rel = self.transmitter_pulse_y_abs - self.data_top_abs
+        z_boundary_y_abs_for_echo_search = self.data_bottom_abs
+        z_boundary_y_rel = z_boundary_y_abs_for_echo_search - self.data_top_abs
+
+        # Get current echo tracing configuration
+        echo_tracing_config = self.config.get("echo_tracing_params", {})
+        surface_config = echo_tracing_config.get("surface_detection", {})
+        bed_config = echo_tracing_config.get("bed_detection", {})
+
+        # Automatic surface detection
+        surface_y_rel = detect_surface_echo(
+            valid_data_crop, tx_pulse_y_rel, surface_config
+        )
+
+        if np.any(np.isfinite(surface_y_rel)):
+            self.detected_surface_y_abs = surface_y_rel + self.data_top_abs
+            print(
+                f"Automatic surface detection: {np.sum(np.isfinite(surface_y_rel))}/{len(surface_y_rel)} valid points"
             )
 
-            if np.any(np.isfinite(surface_y_rel)):
-                self.detected_surface_y_abs = surface_y_rel + self.data_top_abs
+            # Automatic bed detection
+            bed_y_rel = detect_bed_echo(
+                valid_data_crop, surface_y_rel, z_boundary_y_rel, bed_config
+            )
 
-                bed_config = echo_tracing_config.get("bed_detection", {})
+            if np.any(np.isfinite(bed_y_rel)):
+                self.detected_bed_y_abs = bed_y_rel + self.data_top_abs
+                print(
+                    f"Automatic bed detection: {np.sum(np.isfinite(bed_y_rel))}/{len(bed_y_rel)} valid points"
+                )
+            else:
+                self.detected_bed_y_abs = np.full(valid_data_crop.shape[1], np.nan)
+                print("WARNING: No valid bed echoes detected automatically")
+        else:
+            self.detected_surface_y_abs = np.full(valid_data_crop.shape[1], np.nan)
+            self.detected_bed_y_abs = np.full(valid_data_crop.shape[1], np.nan)
+            print("WARNING: No valid surface echoes detected automatically")
+
+        # Phase 2: Show results and get user feedback
+        user_satisfied = self._show_automatic_results_for_approval(valid_data_crop)
+
+        if not user_satisfied:
+            print(
+                "User requested parameter optimization - starting guided calibration..."
+            )
+
+            # Run user-guided calibration
+            optimized_params = self._run_user_guided_calibration(valid_data_crop)
+
+            if optimized_params:
+                # Update configuration and re-run detection
+                self._update_search_parameters(optimized_params)
+
+                # Re-run automatic detection with optimized parameters
+                surface_y_rel = detect_surface_echo(
+                    valid_data_crop,
+                    tx_pulse_y_rel,
+                    echo_tracing_config.get("surface_detection", {}),
+                )
                 bed_y_rel = detect_bed_echo(
-                    valid_data_crop, surface_y_rel, z_boundary_y_rel, bed_config
+                    valid_data_crop,
+                    surface_y_rel,
+                    z_boundary_y_rel,
+                    echo_tracing_config.get("bed_detection", {}),
                 )
 
+                # Update final results
+                if np.any(np.isfinite(surface_y_rel)):
+                    self.detected_surface_y_abs = surface_y_rel + self.data_top_abs
                 if np.any(np.isfinite(bed_y_rel)):
                     self.detected_bed_y_abs = bed_y_rel + self.data_top_abs
-                else:
-                    if valid_data_crop is not None:
-                        self.detected_bed_y_abs = np.full(
-                            valid_data_crop.shape[1], np.nan
-                        )
+
+                print("Echo detection completed with user-optimized parameters")
             else:
-                if valid_data_crop is not None:
-                    self.detected_surface_y_abs = np.full(
-                        valid_data_crop.shape[1], np.nan
-                    )
-                    self.detected_bed_y_abs = np.full(valid_data_crop.shape[1], np.nan)
+                print("User-guided calibration cancelled - using automatic results")
         else:
-            width_for_nan_fallback = 100
-            if self.image_np is not None:
-                width_for_nan_fallback = self.image_np.shape[1]
-            self.detected_surface_y_abs = np.full(width_for_nan_fallback, np.nan)
-            self.detected_bed_y_abs = np.full(width_for_nan_fallback, np.nan)
+            print("User satisfied with automatic results - proceeding to CBD selection")
+
+        print("Echo detection phase completed successfully!")
 
         print("\nStep 7: Creating time-calibrated Z-scope visualization...")
         time_vis_params_config = self.config.get(
@@ -576,7 +896,7 @@ class ZScopeProcessor:
                 nav_df=nav_df,
                 nav_path=nav_path,
                 main_output_dir=self.output_dir,
-                processor_ref=self,  # Pass processor reference for CBD tick storage
+                processor_ref=self,
             )
         )
 
@@ -584,8 +904,12 @@ class ZScopeProcessor:
             print("ERROR: Failed to create time-calibrated Z-scope plot.")
             return False
 
-        # Export basic ice measurements CSV
-        self.export_ice_measurements(self.output_dir)
+        # NEW: Save optimized parameters if they were updated
+        if (
+            hasattr(self, "_parameters_were_optimized")
+            and self._parameters_were_optimized
+        ):
+            self.save_optimized_parameters(self.output_dir)
 
         print(f"\n--- Processing for {self.base_filename} complete. ---")
         print(
