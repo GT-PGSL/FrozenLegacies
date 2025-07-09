@@ -1,5 +1,6 @@
 import matplotlib.pyplot as plt
-import numpy as np  # Not strictly needed for ClickSelector but often useful for interactive tools
+import numpy as np
+import cv2
 
 
 class ClickSelector:
@@ -210,3 +211,216 @@ def get_manual_feature_annotations(
                 updated_features[key]["time_us"] = float("nan")
 
     return updated_features, user_did_annotate
+
+
+class EchoPointSelector:
+    """Interactive tool for selecting surface and bed echo points with crosshair precision."""
+
+    def __init__(self, image, title="Select Echo Points"):
+        self.image = image
+        self.title = title
+        self.surface_points = []
+        self.bed_points = []
+        self.current_mode = "surface"  # "surface" or "bed"
+        self.fig = None
+        self.ax = None
+        self.expected_points = 5  # Increased from 3 for better coverage
+
+    def start_selection(self):
+        """Start interactive point selection with crosshair cursor."""
+        height, width = self.image.shape
+
+        self.fig, self.ax = plt.subplots(figsize=(24, 10))
+
+        # Enhanced image display
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(self.image)
+
+        self.ax.imshow(enhanced, cmap="gray", aspect="auto")
+        self.ax.set_title(
+            f"{self.title}\nMode: {self.current_mode.upper()} echo selection - Click on clear echo peaks",
+            fontsize=16,
+            fontweight="bold",
+        )
+
+        # Add crosshair cursor
+        self.crosshair_v = self.ax.axvline(
+            x=0, color="yellow", linestyle="-", linewidth=1, alpha=0.8, visible=False
+        )
+        self.crosshair_h = self.ax.axhline(
+            y=0, color="yellow", linestyle="-", linewidth=1, alpha=0.8, visible=False
+        )
+
+        # Connect events
+        self.motion_cid = self.fig.canvas.mpl_connect(
+            "motion_notify_event", self._on_mouse_move
+        )
+        self.click_cid = self.fig.canvas.mpl_connect(
+            "button_press_event", self._on_click
+        )
+        self.key_cid = self.fig.canvas.mpl_connect(
+            "key_press_event", self._on_key_press
+        )
+
+        # Instructions
+        self._update_instructions()
+
+        plt.tight_layout()
+        plt.show()
+
+        return self.surface_points, self.bed_points
+
+    def _on_click(self, event):
+        """Handle mouse click events for point selection."""
+        if event.inaxes != self.ax:
+            return
+
+        if event.xdata is None or event.ydata is None:
+            return
+
+        x, y = int(event.xdata), int(event.ydata)
+
+        if self.current_mode == "surface":
+            if len(self.surface_points) < self.expected_points:
+                self.surface_points.append((x, y))
+                color = "cyan"
+                label = f"Surface Point {len(self.surface_points)}"
+                print(f"Added surface point {len(self.surface_points)}: X={x}, Y={y}")
+        else:  # bed mode
+            if len(self.bed_points) < self.expected_points:
+                self.bed_points.append((x, y))
+                color = "orange"
+                label = f"Bed Point {len(self.bed_points)}"
+                print(f"Added bed point {len(self.bed_points)}: X={x}, Y={y}")
+
+        # Draw the selected point
+        self.ax.plot(
+            x,
+            y,
+            "o",
+            color=color,
+            markersize=8,
+            markeredgewidth=2,
+            markeredgecolor="white",
+            markerfacecolor=color,
+            label=label,
+            alpha=0.9,
+        )
+
+        # Add text annotation
+        self.ax.annotate(
+            f"{self.current_mode.upper()}\n{len(self.surface_points if self.current_mode == 'surface' else self.bed_points)}",
+            xy=(x, y),
+            xytext=(10, 10),
+            textcoords="offset points",
+            bbox=dict(boxstyle="round,pad=0.3", fc=color, alpha=0.8),
+            fontsize=10,
+            color="white",
+            fontweight="bold",
+        )
+
+        self.ax.legend()
+        self.fig.canvas.draw()
+
+        # Update instructions and check completion
+        self._update_instructions()
+        self._check_completion()
+
+    def _on_mouse_move(self, event):
+        """Handle mouse movement to update crosshair position."""
+        if event.inaxes == self.ax:
+            self.crosshair_v.set_xdata([event.xdata])
+            self.crosshair_h.set_ydata([event.ydata])
+            self.crosshair_v.set_visible(True)
+            self.crosshair_h.set_visible(True)
+            self.fig.canvas.draw_idle()
+        else:
+            self.crosshair_v.set_visible(False)
+            self.crosshair_h.set_visible(False)
+            self.fig.canvas.draw_idle()
+
+    def _on_key_press(self, event):
+        """Handle keyboard events for mode switching."""
+        if event.key == "s":
+            self.current_mode = "surface"
+            self.ax.set_title(
+                f"{self.title}\nMode: {self.current_mode.upper()} echo selection - Click on clear echo peaks",
+                fontsize=16,
+                fontweight="bold",
+            )
+            print("Switched to SURFACE echo selection mode")
+            self.fig.canvas.draw()
+        elif event.key == "b":
+            self.current_mode = "bed"
+            self.ax.set_title(
+                f"{self.title}\nMode: {self.current_mode.upper()} echo selection - Click on clear echo peaks",
+                fontsize=16,
+                fontweight="bold",
+            )
+            print("Switched to BED echo selection mode")
+            self.fig.canvas.draw()
+        elif event.key == "q" or event.key == "escape":
+            print("Selection completed by user")
+            plt.close(self.fig)
+
+    def _update_instructions(self):
+        """Update instruction text on the plot."""
+        surface_count = len(self.surface_points)
+        bed_count = len(self.bed_points)
+
+        instructions = (
+            "ECHO POINT SELECTION FOR SEARCH OPTIMIZATION:\n"
+            f"Current Mode: {self.current_mode.upper()}\n"
+            "• Press 'S' for Surface mode, 'B' for Bed mode\n"
+            f"• Surface points: {surface_count}/{self.expected_points}\n"
+            f"• Bed points: {bed_count}/{self.expected_points}\n"
+            "• Press 'Q' or 'Escape' when done\n"
+            "• Close window to finish selection"
+        )
+
+        # Clear previous instructions
+        for txt in self.ax.texts:
+            if "ECHO POINT SELECTION" in txt.get_text():
+                txt.remove()
+
+        self.ax.text(
+            0.98,
+            0.02,
+            instructions,
+            transform=self.ax.transAxes,
+            fontsize=12,
+            verticalalignment="bottom",
+            horizontalalignment="right",
+            bbox=dict(boxstyle="round,pad=0.5", facecolor="lightblue", alpha=0.9),
+        )
+
+        def _check_completion(self):
+            """Check if enough points have been selected."""
+            surface_count = len(self.surface_points)
+            bed_count = len(self.bed_points)
+
+            if (
+                surface_count >= self.expected_points
+                and bed_count >= self.expected_points
+            ):
+                print(
+                    f"\nSUCCESS: Selected {surface_count} surface and {bed_count} bed points"
+                )
+                print("You can close the window or press 'Q' to finish selection")
+
+                self.ax.set_title(
+                    f"{self.title}\nCOMPLETE: {surface_count} surface, {bed_count} bed points selected",
+                    fontsize=16,
+                    fontweight="bold",
+                    color="green",
+                )
+                self.fig.canvas.draw()
+
+    def cleanup(self):
+        """Clean up event connections."""
+        if hasattr(self, "motion_cid") and self.motion_cid is not None:
+            self.fig.canvas.mpl_disconnect(self.motion_cid)
+        if hasattr(self, "click_cid") and self.click_cid is not None:
+            self.fig.canvas.mpl_disconnect(self.click_cid)
+        if hasattr(self, "key_cid") and self.key_cid is not None:
+            self.fig.canvas.mpl_disconnect(self.key_cid)
