@@ -169,9 +169,6 @@ def process_flight_batch(
             )
 
             if processing_success:
-                # Export basic CSV
-                processor.export_ice_measurements(Path(output_dir))
-
                 # Export enhanced CSV
                 export_success = export_enhanced_csv_for_image(
                     processor, Path(output_dir), nav_df
@@ -379,9 +376,6 @@ def run_processing():
         sys.exit(1)
 
     print("\nINFO: Core processing completed successfully.")
-
-    # Export basic ice measurements CSV (existing functionality)
-    processor.export_ice_measurements(final_output_dir)
 
     # Load navigation data for enhanced CSV export
     nav_df = None
