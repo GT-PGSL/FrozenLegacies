@@ -199,8 +199,6 @@ class CBDTickSelector:
         # Apply strong unsharp masking to make tick marks very prominent
         gaussian_blur = cv2.GaussianBlur(enhanced_region, (0, 0), 3.0)
         unsharp_mask = cv2.addWeighted(enhanced_region, 2.0, gaussian_blur, -1.0, 0)
-
-        # Final region for display
         final_region = np.clip(unsharp_mask, 0, 255).astype(np.uint8)
 
         # Display with correct coordinate mapping
@@ -288,15 +286,10 @@ class CBDTickSelector:
             # Update crosshair position
             self.crosshair_v.set_xdata([event.xdata])
             self.crosshair_h.set_ydata([event.ydata])
-
-            # Make crosshair visible
             self.crosshair_v.set_visible(True)
             self.crosshair_h.set_visible(True)
-
-            # Redraw only the crosshair for better performance
             self.fig.canvas.draw_idle()
         else:
-            # Hide crosshair when mouse leaves the plot area
             self.crosshair_v.set_visible(False)
             self.crosshair_h.set_visible(False)
             self.fig.canvas.draw_idle()
@@ -310,7 +303,7 @@ class CBDTickSelector:
             x, y = event.xdata, event.ydata
             self.selected_points.append((int(x), int(y)))
 
-            # Improved visual markers - much thinner and less intrusive
+            # Improved visual markers
             color = "red" if len(self.selected_points) == 1 else "blue"
             label = (
                 "First CBD Tick"
@@ -318,44 +311,39 @@ class CBDTickSelector:
                 else "Second CBD Tick"
             )
 
-            # REDUCED marker size and line thickness for less intrusive appearance
             self.ax.plot(
                 x,
                 y,
                 "o",
                 color=color,
-                markersize=12,  # Reduced from 25
-                markeredgewidth=2,  # Reduced from 5
+                markersize=12,
+                markeredgewidth=2,
                 markeredgecolor="white",
                 markerfacecolor=color,
                 label=label,
                 zorder=15,
-                alpha=0.8,  # Added transparency
+                alpha=0.8,
             )
 
-            # THINNER vertical line - much less intrusive
             self.ax.axvline(
                 x=x,
                 color=color,
                 linestyle="-",
-                alpha=0.6,  # Reduced from 0.95
-                linewidth=2,  # Reduced from 5
+                alpha=0.6,
+                linewidth=2,
                 zorder=14,
             )
 
-            # Smaller, less prominent annotation
             self.ax.annotate(
-                f"{label}\nX: {int(x)}",  # Simplified text
+                f"{label}\nX: {int(x)}",
                 xy=(x, y),
-                xytext=(15, 15),  # Reduced offset
+                xytext=(15, 15),
                 textcoords="offset points",
-                bbox=dict(
-                    boxstyle="round,pad=0.3", fc=color, alpha=0.7
-                ),  # Smaller, more transparent
-                fontsize=12,  # Reduced from 16
+                bbox=dict(boxstyle="round,pad=0.3", fc=color, alpha=0.7),
+                fontsize=12,
                 color="white",
                 fontweight="bold",
-                arrowprops=dict(arrowstyle="->", color=color, lw=2),  # Thinner arrow
+                arrowprops=dict(arrowstyle="->", color=color, lw=2),
                 zorder=16,
             )
 
@@ -411,17 +399,17 @@ class CBDTickSelector:
         for i, (approx_x, refined_x) in enumerate(
             zip(self.calculated_ticks, self.refined_ticks)
         ):
-            if i < 2:  # Skip the manually selected ones
+            if i < 2:
                 continue
 
-            # Show approximate position (lighter, thinner)
+            # Show approximate position
             if 0 <= approx_x < self.image_full.shape[1]:
                 self.ax.axvline(
                     x=approx_x,
                     color="gray",
                     linestyle="--",
-                    alpha=0.3,  # More transparent
-                    linewidth=1,  # Thinner
+                    alpha=0.3,
+                    linewidth=1,
                     zorder=11,
                 )
 
@@ -431,8 +419,8 @@ class CBDTickSelector:
                     x=refined_x,
                     color="green",
                     linestyle="-",
-                    alpha=0.7,  # Slightly transparent
-                    linewidth=1.5,  # Thinner than before
+                    alpha=0.7,
+                    linewidth=1.5,
                     zorder=13,
                 )
 
@@ -444,13 +432,11 @@ class CBDTickSelector:
                     f"T{i + 1}",
                     ha="center",
                     va="bottom",
-                    fontsize=10,  # Reduced from 14
+                    fontsize=10,
                     color="green",
                     fontweight="bold",
                     zorder=17,
-                    bbox=dict(
-                        boxstyle="round,pad=0.2", fc="white", alpha=0.8
-                    ),  # Smaller padding
+                    bbox=dict(boxstyle="round,pad=0.2", fc="white", alpha=0.8),
                 )
 
         # Update title with results
@@ -524,7 +510,7 @@ def manual_cbd_tick_selection(
     tick_positions = selector.get_tick_positions()
 
     if debug:
-        print(f"Enhanced manual selection complete:")
+        print(f"Manual selection complete:")
         print(f"  Selected points: {selected_points}")
         print(
             f"  Calculated spacing: {abs(selected_points[1][0] - selected_points[0][0])} pixels"
@@ -553,8 +539,8 @@ def validate_manual_selection_enhanced(
 
     # Show clean, focused region with detected ticks
     height, width = image_full.shape
-    search_height = max(30, int(height * 0.12))  # Search region height
-    sprocket_height = int(height * 0.08)  # Sprocket removal height
+    search_height = max(30, int(height * 0.12))
+    sprocket_height = int(height * 0.08)
 
     # Extract clean region
     clean_region = image_full[sprocket_height : sprocket_height + search_height, :]
@@ -748,7 +734,7 @@ def align_cbd_labels_with_manual_selection(
     ax.set_xticks(cbd_tick_xs)
     ax.set_xticklabels(labels, rotation=0, fontsize=8, ha="center")
 
-    # Add subtle vertical lines for visual confirmation (blue for refined positions)
+    # Add subtle vertical lines for visual confirmation
     for x_pos in cbd_tick_xs:
         ax.axvline(x=x_pos, color="blue", linestyle=":", alpha=0.4, linewidth=1)
 
@@ -1092,7 +1078,7 @@ def create_time_calibrated_zscope(
         borderpad=1.2,
     )
 
-    # Depth and time axes (existing code remains the same)
+    # Depth and time axes
     def abs_y_to_depth(y_abs_coord):
         y_rel = y_abs_coord - transmitter_pulse_y_abs
         time_us = y_rel / pixels_per_microsecond
