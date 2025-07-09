@@ -96,31 +96,6 @@ class ZScopeProcessor:
         else:
             print(f"WARNING: Calpip state file {state_path} does not exist.")
 
-    def export_ice_measurements(self, output_dir):
-        """Export basic 4-column CSV with ice measurements (existing functionality)."""
-        output_path = Path(output_dir) / f"{self.base_filename}_ice_measurements.csv"
-
-        if (
-            self.detected_surface_y_abs is not None
-            and self.detected_bed_y_abs is not None
-            and len(self.detected_surface_y_abs) == len(self.detected_bed_y_abs)
-        ):
-            df = pd.DataFrame(
-                {
-                    "x_pixel": np.arange(len(self.detected_surface_y_abs)),
-                    "surface_y": self.detected_surface_y_abs,
-                    "bed_y": self.detected_bed_y_abs,
-                    "ice_thickness": self.detected_bed_y_abs
-                    - self.detected_surface_y_abs,
-                }
-            )
-            df.to_csv(output_path, index=False)
-            print(f"INFO: Ice measurements CSV saved to {output_path}")
-        else:
-            print(
-                "WARNING: Ice measurements not saved due to missing or mismatched data."
-            )
-
     def export_enhanced_csv_with_coordinates(
         self, output_dir, nav_df=None, cbd_tick_xs=None
     ):
