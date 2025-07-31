@@ -162,7 +162,7 @@ class ManualPickOverride:
 
     def _update_debug_markers(self):
         """Update markers on debug view."""
-        # ✅ FIX: Clear previous markers safely
+
         children_to_remove = []
         for child in self.ax_debug.get_children():
             try:
@@ -240,7 +240,7 @@ class ManualPickOverride:
 
     def _update_calibrated_markers(self):
         """Update markers on calibrated view."""
-        # ✅ FIX: Clear previous markers safely
+
         children_to_remove = []
         for child in self.ax_calib.get_children():
             try:
@@ -336,7 +336,6 @@ class ManualPickOverride:
 
             status_text = "\n".join(status_lines)
 
-            # ✅ FIX: Clear previous text annotations safely
             children_to_remove = []
             for child in self.ax_calib.get_children():
                 try:
