@@ -36,18 +36,6 @@ Use the command line interface to process your A-scope TIFF images:
 - Example usage for re-running frame 04 for AScope file F103-C0467_0479.tiff: 
 `python main.py --input data/103/F103-C0467_0479.tiff --interactive 4`
 
-#### Process with a custom configuration file
-
-`python main.py --input path/to/your/image.tiff --config path/to/config.json`
-
-#### Process with a custom output directory
-
-`python main.py --input path/to/your/image.tiff --output-dir path/to/output`
-
-#### Enable debug mode for detailed logging
-
-`python main.py --input path/to/your/image.tiff --debug`
-
 
 ---
 
