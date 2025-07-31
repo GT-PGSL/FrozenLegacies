@@ -9,6 +9,207 @@ parent_dir = os.path.dirname(current_dir)
 sys.path.append(parent_dir)
 
 
+def detect_double_transmitter_pulse(
+    signal_x_clean, signal_y_clean, power_vals, time_vals, config
+):
+    """
+    Enhanced detection algorithm using signal characteristics analysis.
+    """
+    if time_vals is None or power_vals is None:
+        return {"is_double_pulse": False, "recommended_tx_idx": None, "confidence": 0.0}
+
+    # Focus on early time window (first 4 microseconds for TX detection)
+    early_time_mask = time_vals <= 4.0
+    early_times = time_vals[early_time_mask]
+    early_powers = power_vals[early_time_mask]
+
+    if len(early_times) < 10:  # Not enough data
+        return {"is_double_pulse": False, "recommended_tx_idx": None, "confidence": 0.0}
+
+    # Find peaks in early region using more sophisticated criteria
+    from scipy.signal import find_peaks
+
+    # Use dynamic threshold based on signal characteristics
+    noise_floor = (
+        np.median(power_vals[-50:]) if len(power_vals) >= 50 else np.median(power_vals)
+    )
+    signal_range = np.max(early_powers) - noise_floor
+
+    # Look for significant peaks (at least 15 dB above noise floor)
+    peak_threshold = noise_floor + max(15.0, signal_range * 0.3)
+
+    peaks, properties = find_peaks(
+        early_powers,
+        height=peak_threshold,
+        distance=max(
+            1, int(0.3 / (time_vals[1] - time_vals[0]))
+        ),  # Min 0.3μs separation
+        prominence=max(3.0, signal_range * 0.1),
+        width=2,  # Minimum width to avoid noise spikes
+    )
+
+    result = {
+        "is_double_pulse": False,
+        "tx_peaks": [],
+        "recommended_tx_idx": None,
+        "confidence": 0.0,
+        "all_early_peaks": peaks,
+    }
+
+    # Initialize peak_powers here to avoid UnboundLocalError
+    if len(peaks) == 0:
+        print("WARNING: No TX peaks found in early time window")
+        return result
+
+    # Now we know peaks has elements, so we can safely use it
+    peak_times = early_times[peaks]
+    peak_powers = early_powers[peaks]
+
+    if len(peaks) >= 2:
+        # Analyze peak characteristics for double pulse identification
+        # Check for double pulse pattern: two strong peaks close in time
+        for i in range(len(peaks) - 1):
+            time_sep = peak_times[i + 1] - peak_times[i]
+            power_diff = abs(peak_powers[i + 1] - peak_powers[i])
+            avg_power = (peak_powers[i] + peak_powers[i + 1]) / 2
+
+            # Double pulse criteria: close in time, similar power levels
+            if (
+                0.1 <= time_sep <= 3.5  # Reasonable separation
+                and power_diff <= 8.0  # Similar power levels
+                and avg_power >= peak_threshold
+            ):  # Both are significant
+                result["is_double_pulse"] = True
+                result["tx_peaks"] = [peaks[i], peaks[i + 1]]
+                result["confidence"] = min(
+                    1.0, (8.0 - power_diff) / 8.0 * (3.5 - time_sep) / 3.5
+                )
+
+                # Use the later peak as primary TX reference (more conservative)
+                early_idx = peaks[i + 1]
+                # Convert back to full signal index
+                result["recommended_tx_idx"] = np.where(
+                    time_vals <= early_times[early_idx]
+                )[0][-1]
+                break
+
+    if not result["is_double_pulse"] and len(peaks) >= 1:
+        # Single TX pulse case
+        strongest_peak_idx = peaks[np.argmax(peak_powers)]
+        result["recommended_tx_idx"] = np.where(
+            time_vals <= early_times[strongest_peak_idx]
+        )[0][-1]
+        result["confidence"] = 0.5
+
+    return result
+
+
+def detect_surface_echo_adaptive(power_vals, time_vals, tx_analysis, config):
+    """
+    Enhanced surface detection using signal energy analysis and context.
+    """
+    if time_vals is None or power_vals is None:
+        return None
+
+    # Determine search window based on TX analysis
+    if tx_analysis.get("is_double_pulse", False):
+        # For double TX, start search after the last TX component + safety margin
+        tx_end_time = time_vals[tx_analysis["recommended_tx_idx"]] + 1.0
+        print(
+            f"INFO: Double TX detected - starting surface search at {tx_end_time:.2f}μs"
+        )
+    else:
+        # Standard case
+        tx_time = (
+            time_vals[tx_analysis.get("recommended_tx_idx", 0)]
+            if tx_analysis.get("recommended_tx_idx")
+            else 0
+        )
+        tx_end_time = tx_time + 0.5
+
+    # Define surface search window (typically 1-8 μs after TX)
+    surface_start_time = max(tx_end_time, 1.0)
+    surface_end_time = min(8.0, time_vals.max() * 0.4)
+
+    surface_mask = (time_vals >= surface_start_time) & (time_vals <= surface_end_time)
+    if not np.any(surface_mask):
+        return None
+
+    surface_times = time_vals[surface_mask]
+    surface_powers = power_vals[surface_mask]
+    surface_indices = np.where(surface_mask)[0]
+
+    # Enhanced surface detection using multiple criteria
+    noise_floor = np.median(power_vals[-50:])  # Estimate noise from end
+    signal_std = np.std(power_vals[-50:])
+
+    # Method 1: Look for highest power peak (surface usually strongest after TX)
+    max_power_idx = np.argmax(surface_powers)
+    max_power_candidate = surface_indices[max_power_idx]
+
+    # Method 2: Look for first significant peak above threshold
+    surface_threshold = noise_floor + max(10.0, 4 * signal_std)
+
+    from scipy.signal import find_peaks
+
+    peaks, properties = find_peaks(
+        surface_powers,
+        height=surface_threshold,
+        distance=int(0.2 / (time_vals[1] - time_vals[0])),  # Min 0.2μs separation
+        prominence=max(2.0, 2 * signal_std),
+        width=1,
+    )
+
+    candidates = []
+
+    # Add maximum power candidate
+    if surface_powers[max_power_idx] >= surface_threshold:
+        candidates.append(
+            {
+                "idx": max_power_candidate,
+                "power": surface_powers[max_power_idx],
+                "time": surface_times[max_power_idx],
+                "score": surface_powers[max_power_idx] - noise_floor,
+            }
+        )
+
+    # Add peak candidates
+    for peak_idx in peaks:
+        global_idx = surface_indices[peak_idx]
+        candidates.append(
+            {
+                "idx": global_idx,
+                "power": surface_powers[peak_idx],
+                "time": surface_times[peak_idx],
+                "score": surface_powers[peak_idx] - noise_floor,
+            }
+        )
+
+    if not candidates:
+        print("WARNING: No surface candidates found above threshold")
+        return None
+
+    # Remove duplicates and sort by score (power above noise)
+    unique_candidates = []
+    for candidate in candidates:
+        if not any(
+            abs(candidate["time"] - uc["time"]) < 0.1 for uc in unique_candidates
+        ):
+            unique_candidates.append(candidate)
+
+    unique_candidates.sort(key=lambda x: x["score"], reverse=True)
+
+    # Select best candidate (highest power above noise in surface window)
+    best_surface = unique_candidates[0]
+
+    print(
+        f"INFO: Surface detected at {best_surface['time']:.2f}μs, "
+        f"{best_surface['power']:.1f}dB (score: {best_surface['score']:.1f})"
+    )
+
+    return best_surface["idx"]
+
+
 def find_tx_pulse(signal_x, signal_y, config):
     """Finds the first major positive power peak (minimum y-pixel value)
     near the start of the trace.
