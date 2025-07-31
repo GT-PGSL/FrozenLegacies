@@ -28,19 +28,19 @@ Get started with the A-scope processor in just a few steps:
 Use the command line interface to process your A-scope TIFF images:
 #### Process a specific image
 
-`python runme/main.py --input path/to/your/image.tiff`
+`python main.py --input path/to/your/image.tiff`
 
 #### Process with a custom configuration file
 
-`python runme/main.py --input path/to/your/image.tiff --config path/to/config.json`
+`python main.py --input path/to/your/image.tiff --config path/to/config.json`
 
 #### Process with a custom output directory
 
-`python runme/main.py --input path/to/your/image.tiff --output-dir path/to/output`
+`python main.py --input path/to/your/image.tiff --output-dir path/to/output`
 
 #### Enable debug mode for detailed logging
 
-`python runme/main.py --input path/to/your/image.tiff --debug`
+`python main.py --input path/to/your/image.tiff --debug`
 
 
 ---
