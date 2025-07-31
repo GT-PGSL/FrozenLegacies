@@ -43,7 +43,6 @@ Use the command line interface to process your A-scope TIFF images:
 ## ⚙️ Configuration
 
 - **Default configuration:** `config/default_config.json`
-- **Physical parameters:** `config/physical_params.json`
 
 Override defaults by providing a custom configuration file with the `--config` option.
 
@@ -51,7 +50,7 @@ Override defaults by providing a custom configuration file with the `--config` o
 
 ## 📂 Output
 
-Processed results are saved to the output directory specified in the configuration (default: `ascope_processed`).
+Processed results are saved to the output directory specified in the configuration (default: `output/`).
 
 ---
 
