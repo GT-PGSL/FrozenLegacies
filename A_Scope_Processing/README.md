@@ -30,6 +30,11 @@ Use the command line interface to process your A-scope TIFF images:
 
 `python main.py --input path/to/your/image.tiff`
 
+#### Reprocess selected frame with manual picker 
+`python main.py --input path/to/your/image.tiff --interactive frame_num`  
+
+Example usage for re-running frame 04 for AScope file F103-C0467_0479.tiff:  `python main.py --input data/103/F103-C0467_0479.tiff --interactive 4`
+
 #### Process with a custom configuration file
 
 `python main.py --input path/to/your/image.tiff --config path/to/config.json`
