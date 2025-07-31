@@ -896,7 +896,7 @@ class AScope:
                         if col in frame_result:
                             existing_df.loc[frame_mask, col] = frame_result[col]
 
-                    # ✅ FIX: Ensure CBD is preserved/corrected
+                    # Ensure CBD is preserved/corrected
                     existing_df.loc[frame_mask, "CBD"] = correct_cbd
 
                     print(f"INFO: Updated frame {frame_idx} in existing CSV database")
@@ -941,11 +941,11 @@ class AScope:
                         "override_types": [k for k, v in overrides.items() if v],
                     }
 
-                # ✅ FIX: Save updated NPZ with corrected data from CSV
+                # Save updated NPZ with corrected data from CSV
                 np.savez(
                     main_npz_path,
                     frame=existing_df["Frame"].values,
-                    cbd=existing_df["CBD"].values,  # ✅ FIX: Now has correct CBD values
+                    cbd=existing_df["CBD"].values,
                     surface_time_us=existing_df["Surface_Time_us"].values,
                     bed_time_us=existing_df["Bed_Time_us"].values,
                     ice_thickness_m=existing_df["Ice_Thickness_m"].values,
@@ -1232,7 +1232,7 @@ class AScope:
 
         # Plot physical grid
         plot_min_db = -65
-        plot_max_db = 2.5  # Extend slightly above 0 dB
+        plot_max_db = 2.5
 
         # Define major and minor grid lines
         major_db_ticks = np.arange(
@@ -1445,7 +1445,6 @@ class AScope:
                         color="magenta",
                     ),
                 )
-
         plt.tight_layout(pad=1.5)
         plt.savefig(plot_filename, dpi=self.output_config.get("plot_dpi", 200))
         print(f"Saved combined plot: {plot_filename}")
