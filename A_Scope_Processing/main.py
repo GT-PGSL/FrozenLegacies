@@ -224,7 +224,7 @@ Interactive Override:
         print(f"Output directory: {output_path.resolve()}")
     print(f"Debug mode: {'Enabled' if args.debug else 'Disabled'}")
 
-    # ✅ FIXED: Show interactive mode
+    # Show interactive mode
     if args.interactive:
         print(f"Interactive override: Frame {args.interactive}")
 
