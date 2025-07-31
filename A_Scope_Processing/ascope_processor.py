@@ -4,6 +4,9 @@ import numpy as np
 import cv2
 import matplotlib.pyplot as plt
 import json
+import pandas as pd
+import datetime
+import re
 from pathlib import Path
 
 # Add the functions directory to the Python path
@@ -22,7 +25,6 @@ from signal_processing import (
     detect_signal_in_frame,
     trim_signal_trace,
     adaptive_peak_preserving_smooth,
-    # refine_signal_trace,
     verify_trace_quality,
 )
 from grid_detection import (
@@ -30,18 +32,93 @@ from grid_detection import (
     find_reference_line_blackhat,
     interpolate_regular_grid,
 )
-from echo_detection import find_tx_pulse, detect_surface_echo, detect_bed_echo
+from echo_detection import (
+    find_tx_pulse,
+    detect_surface_echo,
+    detect_bed_echo,
+    detect_double_transmitter_pulse,
+    detect_surface_echo_adaptive,
+)
+
+
+def export_ascope_database(base_filename, output_dir, frame_results, meta_info=None):
+    """
+    Export A-scope results as CSV and NPZ with metadata.
+    """
+    if not frame_results or len(frame_results) == 0:
+        print("ERROR: No frame results to export.")
+        return False
+
+    try:
+        # Create DataFrame from frame results
+        df = pd.DataFrame(frame_results)
+        csv_name = base_filename + "_pick.csv"
+        npz_name = base_filename + "_pick.npz"
+        csv_path = Path(output_dir) / csv_name
+        npz_path = Path(output_dir) / npz_name
+
+        # Export CSV with proper formatting
+        df.to_csv(csv_path, index=False, float_format="%.6f", na_rep="NaN")
+        print(f"INFO: Exported CSV database to {csv_path}")
+
+        # Prepare metadata
+        if meta_info is None:
+            meta_info = {}
+        meta_info["export_timestamp"] = str(datetime.datetime.now())
+        meta_info["frame_count"] = len(df)
+        meta_info["columns"] = list(df.columns)
+        meta_info["filename"] = base_filename
+        meta_info["ice_velocity_m_per_us"] = 168.0  # Standard ice velocity
+
+        # Export NPZ with structured data
+        np.savez(
+            npz_path,
+            frame=df["Frame"].values,
+            cbd=df["CBD"].values,
+            surface_time_us=df["Surface_Time_us"].values,
+            bed_time_us=df["Bed_Time_us"].values,
+            ice_thickness_m=df["Ice_Thickness_m"].values,
+            surface_power_db=df["Surface_Power_dB"].values,
+            bed_power_db=df["Bed_Power_dB"].values,
+            meta=meta_info,
+        )
+        print(f"INFO: Exported NPZ database to {npz_path}")
+
+        # Display summary statistics
+        valid_thickness = np.sum(~pd.isna(df["Ice_Thickness_m"]))
+        valid_surface = np.sum(~pd.isna(df["Surface_Time_us"]))
+        valid_bed = np.sum(~pd.isna(df["Bed_Time_us"]))
+
+        print(
+            f"INFO: Frame summary - Total: {len(df)}, Valid thickness: {valid_thickness}, Valid surface: {valid_surface}, Valid bed: {valid_bed}"
+        )
+
+        return True
+
+    except Exception as e:
+        print(f"ERROR: Database export failed: {e}")
+        import traceback
+
+        traceback.print_exc()
+        return False
+
+    except Exception as e:
+        print(f"ERROR: Database export failed: {e}")
+        import traceback
+
+        traceback.print_exc()
+        return False
 
 
 class AScope:
     """
     A-scope radar data processing class that orchestrates the entire processing pipeline.
+    Enhanced with ice thickness calculation and data export functionality.
     """
 
     def __init__(self, config_path=None):
         # Set up configuration
         self.debug_mode = False  # Default until loaded from config
-
         if config_path is None:
             # Use default config path relative to the ascope directory
             script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -49,7 +126,6 @@ class AScope:
 
         # Resolve the path (handle relative paths)
         resolved_config_path = os.path.abspath(os.path.expanduser(config_path))
-
         print(f"Loading configuration from: {resolved_config_path}")
 
         try:
@@ -68,6 +144,11 @@ class AScope:
         self.debug_mode = self.output_config.get("debug_mode", False)
         self.output_dir = ensure_output_dirs(self.config)
 
+        # Initialize frame results storage
+        self.frame_results = []
+        self.base_filename = None
+        self.cbd_list = []
+
         if self.debug_mode:
             print(f"Debug mode enabled. Using config from: {resolved_config_path}")
 
@@ -80,6 +161,78 @@ class AScope:
         """Set debug mode for additional outputs."""
         self.debug_mode = debug_mode
         self.output_config["debug_mode"] = debug_mode
+
+    def _extract_cbd_sequence_from_filename(self, filename):
+        """Extract CBD sequence from filename and validate frame count."""
+        try:
+            # Extract CBD range from filename (e.g., F103-C0467_0479.tiff)
+            match = re.search(r"C(\d+)_(\d+)", filename)
+            if not match:
+                raise ValueError(
+                    f"Could not extract CBD range from filename: {filename}"
+                )
+
+            cbd_start = int(match.group(1))  # 467
+            cbd_end = int(match.group(2))  # 479
+            cbd_list = list(range(cbd_start, cbd_end + 1))  # [467, 468, ..., 479]
+
+            print(
+                f"INFO: Extracted CBD sequence: {cbd_start} to {cbd_end} ({len(cbd_list)} CBDs expected)"
+            )
+            return cbd_list
+
+        except Exception as e:
+            print(f"ERROR: Failed to extract CBD sequence: {e}")
+            return []
+
+    def _calculate_ice_thickness(self, surface_time_us, bed_time_us):
+        """
+        Calculate ice thickness using one-way travel times.
+
+        Args:
+            surface_time_us (float): Surface echo time in microseconds (one-way)
+            bed_time_us (float): Bed echo time in microseconds (one-way)
+
+        Returns:
+            float: Ice thickness in meters, or NaN if calculation not possible
+        """
+        if surface_time_us is None or bed_time_us is None:
+            return np.nan
+
+        if np.isnan(surface_time_us) or np.isnan(bed_time_us):
+            return np.nan
+
+        if bed_time_us <= surface_time_us:
+            print(
+                f"WARNING: Bed time ({bed_time_us:.2f} μs) <= surface time ({surface_time_us:.2f} μs)"
+            )
+            return np.nan
+
+        # Ice thickness = (bed_time - surface_time) × ice_velocity
+        # Using standard ice velocity of 168 m/μs
+        ice_velocity_m_per_us = 168.0
+        travel_time_us = bed_time_us - surface_time_us
+        ice_thickness_m = travel_time_us * ice_velocity_m_per_us
+
+        return ice_thickness_m
+
+    def _export_results(self):
+        """Export frame results as CSV and NPZ files."""
+        if not self.frame_results:
+            print("WARNING: No frame results to export")
+            return False
+
+        meta_info = {
+            "ascope_file": self.base_filename,
+            "processing_timestamp": str(datetime.datetime.now()),
+            "ice_velocity_m_per_us": 168.0,
+            "total_frames": len(self.frame_results),
+            "cbd_sequence": self.cbd_list,
+        }
+
+        return export_ascope_database(
+            self.base_filename, self.output_dir, self.frame_results, meta_info
+        )
 
     def process_interactive(self):
         """Process an image with interactive input for the file path."""
@@ -109,6 +262,7 @@ class AScope:
 
             image, base_filename = load_and_preprocess_image(file_path)
             self._process_image_data(image, base_filename)
+
         except Exception as e:
             print(f"Error processing image {file_path}: {e}")
             import traceback
@@ -117,180 +271,313 @@ class AScope:
 
     def _process_image_data(self, image, base_filename):
         """Internal method to process image data through the pipeline."""
+        self.base_filename = base_filename
+        self.frame_results = []  # Reset frame results for new image
+
+        # Extract CBD sequence from filename
+        self.cbd_list = self._extract_cbd_sequence_from_filename(base_filename)
+
+        print(f"\n=== Processing A-scope Image: {base_filename} ===")
+
         # Step 1: Mask sprocket holes
+        print("Step 1: Masking sprocket holes...")
         masked_image, mask = mask_sprocket_holes(image, self.config)
 
         # Step 2: Detect A-scope frames
+        print("Step 2: Detecting A-scope frames...")
         frames = detect_ascope_frames(masked_image, self.config)
 
+        # Validate frame count against CBD sequence
+        if self.cbd_list and len(frames) != len(self.cbd_list):
+            print(
+                f"WARNING: Frame count ({len(frames)}) doesn't match expected CBD count ({len(self.cbd_list)})"
+            )
+            if len(frames) < len(self.cbd_list):
+                # Adjust CBD list to match detected frames
+                print(
+                    f"INFO: Adjusting CBD list to match {len(frames)} detected frames"
+                )
+                self.cbd_list = self.cbd_list[: len(frames)]
+            else:
+                # Use detected frame count and extend CBD list if needed
+                print(
+                    f"INFO: Extending CBD list to match {len(frames)} detected frames"
+                )
+                while len(self.cbd_list) < len(frames):
+                    self.cbd_list.append(
+                        self.cbd_list[-1] + 1 if self.cbd_list else 467
+                    )
+
         # Step 3: Verify frames visually
+        print("Step 3: Creating frame verification plot...")
         verify_frames_visually(masked_image, frames, base_filename, self.config)
 
-        # Process each frame
+        # Step 4: Process each frame
+        print(f"Step 4: Processing {len(frames)} individual frames...")
         for idx, (left, right) in enumerate(frames):
             print(
                 f"\n--- Processing frame {idx + 1}/{len(frames)}: cols {left}-{right} ---"
             )
             self._process_frame(masked_image, left, right, base_filename, idx + 1)
 
+        # Step 5: Export data automatically
+        print(f"\nStep 5: Exporting database (CSV + NPZ)...")
+        self._export_results()
+
+        print(f"\n=== Processing Complete for {base_filename} ===")
+
     def _process_frame(self, masked_image, left, right, base_filename, frame_idx):
-        """Process an individual A-scope frame."""
-        # Extract the frame
-        frame_img = masked_image[:, left:right].copy()
-        h, w = frame_img.shape
+        """Process an individual A-scope frame and store results."""
+        # Initialize frame result structure
+        frame_result = {
+            "Frame": frame_idx,
+            "CBD": self.cbd_list[frame_idx - 1]
+            if frame_idx <= len(self.cbd_list)
+            else np.nan,
+            "Surface_Time_us": np.nan,
+            "Bed_Time_us": np.nan,
+            "Ice_Thickness_m": np.nan,
+            "Surface_Power_dB": np.nan,
+            "Bed_Power_dB": np.nan,
+        }
 
-        if w <= 0 or h <= 0:
-            print("Warning: Frame has zero width or height. Skipping.")
-            return
+        try:
+            # Extract the frame
+            frame_img = masked_image[:, left:right].copy()
+            h, w = frame_img.shape
 
-        # 1. Detect Signal Trace
-        signal_x, signal_y = detect_signal_in_frame(frame_img, self.config)
-        if signal_x is None:
-            print(f"Signal detection failed for frame {frame_idx}. Skipping.")
-            return
+            if w <= 0 or h <= 0:
+                print("Warning: Frame has zero width or height. Skipping.")
+                self.frame_results.append(frame_result)
+                return
 
-        signal_y = adaptive_peak_preserving_smooth(signal_y, self.config)
+            # 1. Detect Signal Trace
+            signal_x, signal_y = detect_signal_in_frame(frame_img, self.config)
+            if signal_x is None:
+                print(f"Signal detection failed for frame {frame_idx}. Skipping.")
+                self.frame_results.append(frame_result)
+                return
 
-        # 2. Clean Signal Trace
-        signal_x_clean, signal_y_clean = trim_signal_trace(
-            frame_img, signal_x, signal_y, self.config
-        )
-        if len(signal_x_clean) == 0:
+            signal_y = adaptive_peak_preserving_smooth(signal_y, self.config)
+
+            # 2. Clean Signal Trace
+            signal_x_clean, signal_y_clean = trim_signal_trace(
+                frame_img, signal_x, signal_y, self.config
+            )
+
+            if len(signal_x_clean) == 0:
+                print(
+                    f"No valid signal trace left after cleaning for frame {frame_idx}. Skipping."
+                )
+                self.frame_results.append(frame_result)
+                return
+
+            print(f"Cleaned signal length: {len(signal_x_clean)} points")
+
+            # Verify the signal trace
+            trace_quality_score = verify_trace_quality(
+                frame_img, signal_x_clean, signal_y_clean
+            )
             print(
-                f"No valid signal trace left after cleaning for frame {frame_idx}. Skipping."
+                f"Trace quality score for frame {frame_idx}: {trace_quality_score:.2f}"
             )
-            return
-        print(f"Cleaned signal length: {len(signal_x_clean)} points")
 
-        # Verify the signal trace
-        trace_quality_score = verify_trace_quality(
-            frame_img, signal_x_clean, signal_y_clean
-        )
-        print(f"Trace quality score for frame {frame_idx}: {trace_quality_score:.2f}")
+            # 3. Initial Tx Pulse Detection (for grid calibration)
+            tx_pulse_col, tx_idx_in_clean = find_tx_pulse(
+                signal_x_clean, signal_y_clean, self.config
+            )
 
-        # 3. Find Tx Pulse (for X-axis anchor)
-        tx_pulse_col, tx_idx_in_clean = find_tx_pulse(
-            signal_x_clean, signal_y_clean, self.config
-        )
-        if tx_pulse_col is None:
-            print("Warning: Tx pulse detection failed. Using default X-anchor.")
-            tx_anchor = w * 0.15  # Fallback anchor near start
-        else:
-            tx_anchor = tx_pulse_col
+            if tx_pulse_col is None:
+                print("Warning: Tx pulse detection failed. Using default X-anchor.")
+                tx_pulse_col = w * 0.15  # Fallback anchor near start
+                tx_idx_in_clean = (
+                    int(len(signal_x_clean) * 0.15) if len(signal_x_clean) > 0 else 0
+                )
+
             print(
-                f"Tx pulse estimated at col {tx_pulse_col:.1f} (index {tx_idx_in_clean} in clean signal)"
+                f"Initial Tx pulse estimated at col {tx_pulse_col:.1f} (index {tx_idx_in_clean} in clean signal)"
             )
 
-        # 4. Find Reference Line (Y-axis anchor)
-        ref_row = find_reference_line_blackhat(
-            frame_img, base_filename, frame_idx, self.config
-        )
-        if ref_row is None:
-            print("Error: Reference line detection failed critically. Skipping frame.")
-            return
-        print(
-            f"Reference row ({self.physical_params['y_ref_dB']} dB) estimated at y={ref_row}"
-        )
-
-        # 5. Detect Grid Lines (for interpolation)
-        # Define qa_path before using it
-        qa_path = f"{self.output_dir}/{base_filename}_frame{frame_idx:02d}_grid_QA.png"
-
-        # Call detect_grid_lines_and_dotted with four return values
-        h_peaks_initial, v_peaks_initial, h_minor_peaks, v_minor_peaks = (
-            detect_grid_lines_and_dotted(
-                frame_img, self.config, qa_plot_path=qa_path, ref_row_for_qa=ref_row
+            # 4. Find Reference Line (Y-axis anchor)
+            ref_row = find_reference_line_blackhat(
+                frame_img, base_filename, frame_idx, self.config
             )
-        )
 
-        # When calling interpolate_regular_grid, use the dynamic range values
-        # For Y-axis (power in dB), use range of 55 dB (-60 to -5 dB)
-        y_range_dB = 8.25 * 10  # Dynamic range based on signal extent
-        y_major, y_minor = interpolate_regular_grid(
-            h,
-            h_peaks_initial,
-            ref_row,
-            self.physical_params["y_major_dB"],
-            self.physical_params["y_minor_per_major"],
-            y_range_dB,  # Use dynamic range
-            is_y_axis=True,
-            config=self.config,
-        )
+            if ref_row is None:
+                print(
+                    "Error: Reference line detection failed critically. Skipping frame."
+                )
+                self.frame_results.append(frame_result)
+                return
 
-        # For X-axis (time in μs), use range of 17.5 μs (0 to 17.5 μs)
-        x_range_us = self.physical_params.get(
-            "x_range_factor"
-        ) * self.physical_params.get("x_major_us")
-
-        x_major, x_minor = interpolate_regular_grid(
-            w,
-            v_peaks_initial,
-            tx_anchor,
-            self.physical_params["x_major_us"],
-            self.physical_params["x_minor_per_major"],
-            x_range_us,  # Use dynamic range
-            is_y_axis=False,
-            config=self.config,
-        )
-
-        # 6. Generate Grid QA Plot
-        qa_path = f"{self.output_dir}/{base_filename}_frame{frame_idx:02d}_grid_QA.png"
-        detect_grid_lines_and_dotted(
-            frame_img, self.config, qa_plot_path=qa_path, ref_row_for_qa=ref_row
-        )
-        print(f"Saved grid QA plot: {qa_path}")
-
-        # 8. Calculate Calibration Factors
-        px_per_us_echo, px_per_db_echo = self._calculate_calibration_factors(
-            x_major, y_major, w, h
-        )
-
-        # 9. Calibrate Signal
-        power_vals, time_vals = None, None
-        if tx_pulse_col is not None and ref_row is not None:
-            power_vals = (
-                self.physical_params["y_ref_dB"]
-                - (signal_y_clean - ref_row) / px_per_db_echo
-            )
-            time_vals = (signal_x_clean - tx_pulse_col) / px_per_us_echo
-        else:
             print(
-                "Warning: Cannot calibrate signal power due to missing anchors or factors."
+                f"Reference row ({self.physical_params['y_ref_dB']} dB) estimated at y={ref_row}"
             )
 
-        # 10. Detect Echoes
-        surf_idx_in_clean, bed_idx_in_clean = None, None
-        if power_vals is not None and len(power_vals) > 0:
-            surf_idx_in_clean = detect_surface_echo(
-                power_vals, tx_idx_in_clean, self.config
+            # 5. Detect Grid Lines (for interpolation)
+            qa_path = (
+                f"{self.output_dir}/{base_filename}_frame{frame_idx:02d}_grid_QA.png"
             )
+            h_peaks_initial, v_peaks_initial, h_minor_peaks, v_minor_peaks = (
+                detect_grid_lines_and_dotted(
+                    frame_img, self.config, qa_plot_path=qa_path, ref_row_for_qa=ref_row
+                )
+            )
+
+            # When calling interpolate_regular_grid, use the dynamic range values
+            y_range_dB = 8.25 * 10  # Dynamic range based on signal extent
+            y_major, y_minor = interpolate_regular_grid(
+                h,
+                h_peaks_initial,
+                ref_row,
+                self.physical_params["y_major_dB"],
+                self.physical_params["y_minor_per_major"],
+                y_range_dB,
+                is_y_axis=True,
+                config=self.config,
+            )
+
+            # For X-axis (time in μs), use range of 17.5 μs (0 to 17.5 μs)
+            x_range_us = self.physical_params.get(
+                "x_range_factor"
+            ) * self.physical_params.get("x_major_us")
+            x_major, x_minor = interpolate_regular_grid(
+                w,
+                v_peaks_initial,
+                tx_pulse_col,  # ✅ Fixed: Use tx_pulse_col (number) not tx_analysis (dict)
+                self.physical_params["x_major_us"],
+                self.physical_params["x_minor_per_major"],
+                x_range_us,
+                is_y_axis=False,
+                config=self.config,
+            )
+
+            print(f"Saved grid QA plot: {qa_path}")
+
+            # 6. Calculate Calibration Factors
+            px_per_us_echo, px_per_db_echo = self._calculate_calibration_factors(
+                x_major, y_major, w, h
+            )
+
+            # 7. Calibrate Signal to get power_vals and time_vals
+            power_vals, time_vals = None, None
+            if tx_pulse_col is not None and ref_row is not None:
+                power_vals = (
+                    self.physical_params["y_ref_dB"]
+                    - (signal_y_clean - ref_row) / px_per_db_echo
+                )
+                time_vals = (signal_x_clean - tx_pulse_col) / px_per_us_echo
+            else:
+                print(
+                    "Warning: Cannot calibrate signal power due to missing anchors or factors."
+                )
+                self.frame_results.append(frame_result)
+                return
+
+            # 8. Enhanced Echo Detection with Double TX Pulse Support
+            print("INFO: Starting enhanced echo detection...")
+
+            # Call enhanced double transmitter pulse detection
+            tx_analysis = detect_double_transmitter_pulse(
+                signal_x_clean, signal_y_clean, power_vals, time_vals, self.config
+            )
+
+            if tx_analysis["is_double_pulse"]:
+                print(
+                    f"INFO: Double transmitter pulse detected (confidence: {tx_analysis['confidence']:.2f})"
+                )
+                print(
+                    f"INFO: TX components at: {[time_vals[i] for i in tx_analysis['tx_peaks']]} μs"
+                )
+
+                # Update tx_idx_in_clean if enhanced detection found something better
+                if tx_analysis.get("recommended_tx_idx") is not None:
+                    tx_idx_in_clean = tx_analysis["recommended_tx_idx"]
+                    print(
+                        f"INFO: Updated TX index to {tx_idx_in_clean} based on enhanced detection"
+                    )
+
+            # Call enhanced surface detection
+            surf_idx_in_clean = detect_surface_echo_adaptive(
+                power_vals, time_vals, tx_analysis, self.config
+            )
+
+            # Call existing bed detection
             bed_idx_in_clean = detect_bed_echo(
                 power_vals, time_vals, surf_idx_in_clean, px_per_us_echo, self.config
             )
-        else:
-            print("Skipping echo detection due to calibration failure.")
 
-        # 11. Plot Combined Results
-        self._plot_combined_results(
-            frame_img,
-            signal_x_clean,
-            signal_y_clean,
-            x_major,
-            y_major,
-            x_minor,
-            y_minor,
-            ref_row,
-            base_filename,
-            frame_idx,
-            tx_pulse_col,
-            tx_idx_in_clean,
-            surf_idx_in_clean,
-            bed_idx_in_clean,
-            power_vals,
-            time_vals,
-            px_per_us_echo,
-            px_per_db_echo,
-        )
+            # 9. Store Frame Results with Ice Thickness Calculation
+            if (
+                surf_idx_in_clean is not None
+                and surf_idx_in_clean < len(time_vals)
+                and time_vals is not None
+                and power_vals is not None
+            ):
+                surface_time = time_vals[surf_idx_in_clean]
+                surface_power = power_vals[surf_idx_in_clean]
+                frame_result["Surface_Time_us"] = surface_time
+                frame_result["Surface_Power_dB"] = surface_power
+
+                print(
+                    f"Surface detected: {surface_time:.2f} μs, {surface_power:.1f} dB"
+                )
+
+            if (
+                bed_idx_in_clean is not None
+                and bed_idx_in_clean < len(time_vals)
+                and time_vals is not None
+                and power_vals is not None
+            ):
+                bed_time = time_vals[bed_idx_in_clean]
+                bed_power = power_vals[bed_idx_in_clean]
+                frame_result["Bed_Time_us"] = bed_time
+                frame_result["Bed_Power_dB"] = bed_power
+
+                print(f"Bed detected: {bed_time:.2f} μs, {bed_power:.1f} dB")
+
+            # Calculate ice thickness if both surface and bed are available
+            if not np.isnan(frame_result["Surface_Time_us"]) and not np.isnan(
+                frame_result["Bed_Time_us"]
+            ):
+                ice_thickness = self._calculate_ice_thickness(
+                    frame_result["Surface_Time_us"], frame_result["Bed_Time_us"]
+                )
+                frame_result["Ice_Thickness_m"] = ice_thickness
+
+                if not np.isnan(ice_thickness):
+                    print(f"Ice thickness calculated: {ice_thickness:.1f} m")
+
+            # 10. Plot Combined Results (renamed to "picked.png")
+            self._plot_combined_results(
+                frame_img,
+                signal_x_clean,
+                signal_y_clean,
+                x_major,
+                y_major,
+                x_minor,
+                y_minor,
+                ref_row,
+                base_filename,
+                frame_idx,
+                tx_pulse_col,
+                tx_idx_in_clean,
+                surf_idx_in_clean,
+                bed_idx_in_clean,
+                power_vals,
+                time_vals,
+                px_per_us_echo,
+                px_per_db_echo,
+            )
+
+        except Exception as e:
+            print(f"ERROR: Frame {frame_idx} processing failed: {e}")
+            import traceback
+
+            traceback.print_exc()
+
+        # Store frame result (even if processing failed)
+        self.frame_results.append(frame_result)
 
     def _calculate_calibration_factors(self, x_major, y_major, w, h):
         """Calculate px_per_us and px_per_db calibration factors."""
@@ -376,7 +663,11 @@ class AScope:
     ):
         """Generate and save a combined plot with debug view and calibrated view."""
         h, w = frame_img.shape
-        plot_filename = f"{self.output_dir}/{base_filename}_frame{frame_idx:02d}_combined_annotated.png"
+
+        # RENAMED: Use "picked.png" instead of "combined_annotated.png"
+        plot_filename = (
+            f"{self.output_dir}/{base_filename}_frame{frame_idx:02d}_picked.png"
+        )
 
         # Create the figure with two subplots
         fig, axes = plt.subplots(1, 2, figsize=(16, 6))
@@ -407,6 +698,7 @@ class AScope:
                 alpha=major_alpha,
                 linewidth=0.8,
             )
+
         for y in y_minor:
             ax_debug.axhline(
                 y,
@@ -415,6 +707,7 @@ class AScope:
                 alpha=minor_alpha,
                 linewidth=0.8,
             )
+
         for x in x_major:
             ax_debug.axvline(
                 x,
@@ -423,6 +716,7 @@ class AScope:
                 alpha=major_alpha,
                 linewidth=0.8,
             )
+
         for x in x_minor:
             ax_debug.axvline(
                 x,
@@ -441,6 +735,7 @@ class AScope:
                 linewidth=0.8,
                 label=f"Ref Line ({self.physical_params['y_ref_dB']} dB)",
             )
+
         if tx_pulse_col is not None:
             ax_debug.axvline(
                 tx_pulse_col,
@@ -467,6 +762,7 @@ class AScope:
                     ms=6,
                     label="Tx",
                 )
+
             if surf_idx_in_clean is not None and surf_idx_in_clean < len(
                 signal_x_clean
             ):
@@ -477,6 +773,7 @@ class AScope:
                     ms=6,
                     label="Surf",
                 )
+
             if bed_idx_in_clean is not None and bed_idx_in_clean < len(signal_x_clean):
                 ax_debug.plot(
                     signal_x_clean[bed_idx_in_clean],
@@ -536,6 +833,7 @@ class AScope:
                 alpha=major_alpha,
                 linewidth=1.0,
             )
+
         for db in minor_db_ticks:
             ax_calib.axhline(
                 db,
@@ -548,13 +846,13 @@ class AScope:
         # Define time range
         plot_min_time = -1  # Start slightly before Tx
         plot_max_time = self.physical_params["x_range_us"] + 2
-
         if time_vals is not None and len(time_vals) > 0:
             plot_max_time = max(plot_max_time, np.ceil(time_vals.max()) + 2)
 
         major_time_ticks = np.arange(
             0, plot_max_time, self.physical_params["x_major_us"]
         )
+
         minor_time_per_major = self.physical_params["x_major_us"] / (
             self.physical_params["x_minor_per_major"] + 1
         )
@@ -569,6 +867,7 @@ class AScope:
                 alpha=major_alpha,
                 linewidth=1.0,
             )
+
         for t in minor_time_ticks:
             ax_calib.axvline(
                 t,
@@ -595,6 +894,7 @@ class AScope:
         y_major_labels = np.arange(
             self.physical_params["y_ref_dB"], plot_max_db + 1, y_label_step
         )
+
         ax_calib.set_yticks(y_major_labels)
         ax_calib.set_yticklabels([f"{int(db)}" for db in y_major_labels], fontsize=10)
         ax_calib.yaxis.set_minor_locator(FixedLocator(minor_db_ticks))
@@ -657,8 +957,6 @@ class AScope:
 
         # Add annotations with arrows for detected points
         if valid_signal and time_vals is not None and len(time_vals) > 0:
-            # Format for annotation: "Point (~X.X dB at Y.Y μs)"
-
             # Annotate Tx point
             if tx_idx_in_clean is not None and tx_idx_in_clean < len(time_vals):
                 tx_time = time_vals[tx_idx_in_clean]
@@ -666,10 +964,11 @@ class AScope:
                 tx_label = (
                     f"transmitter pulse\n(~{tx_power:.1f} dB at {tx_time:.1f} μs)"
                 )
+
                 ax_calib.annotate(
                     tx_label,
-                    xy=(tx_time, tx_power),  # Point to annotate
-                    xytext=(-50, -40),  # Offset text position
+                    xy=(tx_time, tx_power),
+                    xytext=(-50, -40),
                     textcoords="offset points",
                     ha="center",
                     va="top",
@@ -685,18 +984,19 @@ class AScope:
                 surf_time = time_vals[surf_idx_in_clean]
                 surf_power = power_vals[surf_idx_in_clean]
                 surf_label = f"surface\n(~{surf_power:.1f} dB at {surf_time:.1f} μs)"
+
                 ax_calib.annotate(
                     surf_label,
-                    xy=(surf_time, surf_power),  # Point to annotate
-                    xytext=(-60, -15),  # Offset: 60 points left, 15 points down
+                    xy=(surf_time, surf_power),
+                    xytext=(-60, -15),
                     textcoords="offset points",
-                    ha="right",  # Text aligned to the right of the offset point
-                    va="top",  # Top of the text box aligned with the offset point's y-coordinate
+                    ha="right",
+                    va="top",
                     fontsize=9,
                     bbox=dict(boxstyle="round,pad=0.5", fc="white", alpha=0.7),
                     arrowprops=dict(
                         arrowstyle="->",
-                        connectionstyle="arc3,rad=0.3",  # Adjusted curve for leftward arrow
+                        connectionstyle="arc3,rad=0.3",
                         color="green",
                     ),
                 )
@@ -706,21 +1006,23 @@ class AScope:
                 bed_time = time_vals[bed_idx_in_clean]
                 bed_power = power_vals[bed_idx_in_clean]
                 bed_label = f"bed\n(~{bed_power:.1f} dB at {bed_time:.1f} μs)"
+
                 ax_calib.annotate(
                     bed_label,
-                    xy=(bed_time, bed_power),  # Point to annotate
-                    xytext=(60, -15),  # Offset: 60 points right, 15 points down
+                    xy=(bed_time, bed_power),
+                    xytext=(60, -15),
                     textcoords="offset points",
-                    ha="left",  # Text aligned to the left of the offset point
-                    va="top",  # Top of the text box aligned with the offset point's y-coordinate
+                    ha="left",
+                    va="top",
                     fontsize=9,
                     bbox=dict(boxstyle="round,pad=0.5", fc="white", alpha=0.7),
                     arrowprops=dict(
                         arrowstyle="->",
-                        connectionstyle="arc3,rad=-0.3",  # Adjusted curve for rightward arrow
+                        connectionstyle="arc3,rad=-0.3",
                         color="magenta",
                     ),
                 )
+
         plt.tight_layout(pad=1.5)
         plt.savefig(plot_filename, dpi=self.output_config.get("plot_dpi", 200))
         print(f"Saved combined plot: {plot_filename}")
