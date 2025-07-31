@@ -579,6 +579,156 @@ class AScope:
         # Store frame result (even if processing failed)
         self.frame_results.append(frame_result)
 
+    def _process_frame_for_override(
+        self, masked_image, left, right, base_filename, frame_idx
+    ):
+        """
+        Process frame up to automatic echo detection for interactive override.
+
+        Returns:
+            dict: Frame data containing all necessary components for override
+        """
+        try:
+            # Extract the frame
+            frame_img = masked_image[:, left:right].copy()
+            h, w = frame_img.shape
+
+            if w <= 0 or h <= 0:
+                print("Warning: Frame has zero width or height.")
+                return None
+
+            # 1-7: Same processing as normal frame processing up to signal calibration
+            from functions.signal_processing import (
+                detect_signal_in_frame,
+                trim_signal_trace,
+                adaptive_peak_preserving_smooth,
+            )
+            from functions.grid_detection import (
+                detect_grid_lines_and_dotted,
+                find_reference_line_blackhat,
+                interpolate_regular_grid,
+            )
+            from functions.echo_detection import (
+                find_tx_pulse,
+                detect_surface_echo_adaptive,
+                detect_bed_echo,
+            )
+
+            # Signal detection
+            signal_x, signal_y = detect_signal_in_frame(frame_img, self.config)
+            if signal_x is None:
+                print(f"Signal detection failed for frame {frame_idx}")
+                return None
+
+            signal_y = adaptive_peak_preserving_smooth(signal_y, self.config)
+            signal_x_clean, signal_y_clean = trim_signal_trace(
+                frame_img, signal_x, signal_y, self.config
+            )
+
+            if len(signal_x_clean) == 0:
+                print(f"No valid signal trace for frame {frame_idx}")
+                return None
+
+            # TX pulse and reference line detection
+            tx_pulse_col, tx_idx_in_clean = find_tx_pulse(
+                signal_x_clean, signal_y_clean, self.config
+            )
+            ref_row = find_reference_line_blackhat(
+                frame_img, base_filename, frame_idx, self.config
+            )
+
+            if tx_pulse_col is None or ref_row is None:
+                print(f"Critical detection failed for frame {frame_idx}")
+                return None
+
+            # Grid detection and calibration
+            h_peaks_initial, v_peaks_initial, h_minor_peaks, v_minor_peaks = (
+                detect_grid_lines_and_dotted(frame_img, self.config)
+            )
+
+            y_range_dB = 8.25 * 10
+            y_major, y_minor = interpolate_regular_grid(
+                h,
+                h_peaks_initial,
+                ref_row,
+                self.physical_params["y_major_dB"],
+                self.physical_params["y_minor_per_major"],
+                y_range_dB,
+                is_y_axis=True,
+                config=self.config,
+            )
+
+            x_range_us = self.physical_params.get(
+                "x_range_factor"
+            ) * self.physical_params.get("x_major_us")
+            x_major, x_minor = interpolate_regular_grid(
+                w,
+                v_peaks_initial,
+                tx_pulse_col,
+                self.physical_params["x_major_us"],
+                self.physical_params["x_minor_per_major"],
+                x_range_us,
+                is_y_axis=False,
+                config=self.config,
+            )
+
+            # Calculate calibration factors
+            px_per_us_echo, px_per_db_echo = self._calculate_calibration_factors(
+                x_major, y_major, w, h
+            )
+
+            # Calibrate signal
+            power_vals = (
+                self.physical_params["y_ref_dB"]
+                - (signal_y_clean - ref_row) / px_per_db_echo
+            )
+            time_vals = (signal_x_clean - tx_pulse_col) / px_per_us_echo
+
+            # Get automatic echo detection results
+            from functions.echo_detection import (
+                detect_double_transmitter_pulse,
+                detect_surface_echo_adaptive,
+                detect_bed_echo,
+            )
+
+            tx_analysis = detect_double_transmitter_pulse(
+                signal_x_clean, signal_y_clean, power_vals, time_vals, self.config
+            )
+            surface_idx = detect_surface_echo_adaptive(
+                power_vals, time_vals, tx_analysis, self.config
+            )
+            bed_idx = detect_bed_echo(
+                power_vals, time_vals, surface_idx, px_per_us_echo, self.config
+            )
+
+            # Use enhanced TX detection if available
+            if tx_analysis.get("recommended_tx_idx") is not None:
+                tx_idx_in_clean = tx_analysis["recommended_tx_idx"]
+
+            return {
+                "frame_img": frame_img,
+                "signal_x_clean": signal_x_clean,
+                "signal_y_clean": signal_y_clean,
+                "power_vals": power_vals,
+                "time_vals": time_vals,
+                "tx_idx": tx_idx_in_clean,
+                "surface_idx": surface_idx,
+                "bed_idx": bed_idx,
+                "calibration_data": {
+                    "px_per_us_echo": px_per_us_echo,
+                    "px_per_db_echo": px_per_db_echo,
+                    "ref_row": ref_row,
+                    "tx_pulse_col": tx_pulse_col,
+                },
+            }
+
+        except Exception as e:
+            print(f"ERROR: Frame processing for override failed: {e}")
+            import traceback
+
+            traceback.print_exc()
+            return None
+
     def _calculate_calibration_factors(self, x_major, y_major, w, h):
         """Calculate px_per_us and px_per_db calibration factors."""
         px_per_us, px_per_db = None, None
@@ -639,6 +789,280 @@ class AScope:
             )
 
         return px_per_us, px_per_db
+
+    def _save_frame_with_manual_picks(
+        self,
+        frame_data,
+        manual_tx,
+        manual_surface,
+        manual_bed,
+        overrides,
+        base_filename,
+        frame_idx,
+    ):
+        """
+        Save frame results with manual pick overrides and update main database files.
+        """
+        try:
+            # ✅ FIX: Get CBD from existing data or calculate properly
+            if (
+                hasattr(self, "cbd_list")
+                and self.cbd_list
+                and frame_idx <= len(self.cbd_list)
+            ):
+                correct_cbd = self.cbd_list[frame_idx - 1]
+            else:
+                # Fallback: extract from filename if cbd_list not available
+                import re
+
+                match = re.search(r"C(\d+)_(\d+)", base_filename)
+                if match:
+                    cbd_start = int(match.group(1))
+                    correct_cbd = cbd_start + frame_idx - 1
+                else:
+                    correct_cbd = np.nan
+
+            # Create frame result with manual picks
+            frame_result = {
+                "Frame": frame_idx,
+                "CBD": correct_cbd,  # ✅ FIX: Use correctly calculated CBD
+                "Surface_Time_us": np.nan,
+                "Bed_Time_us": np.nan,
+                "Ice_Thickness_m": np.nan,
+                "Surface_Power_dB": np.nan,
+                "Bed_Power_dB": np.nan,
+            }
+
+            # Extract data
+            power_vals = frame_data["power_vals"]
+            time_vals = frame_data["time_vals"]
+
+            # Store results using manual picks
+            if manual_surface is not None and manual_surface < len(time_vals):
+                frame_result["Surface_Time_us"] = time_vals[manual_surface]
+                frame_result["Surface_Power_dB"] = power_vals[manual_surface]
+
+            if manual_bed is not None and manual_bed < len(time_vals):
+                frame_result["Bed_Time_us"] = time_vals[manual_bed]
+                frame_result["Bed_Power_dB"] = power_vals[manual_bed]
+
+            # Calculate ice thickness
+            if not np.isnan(frame_result["Surface_Time_us"]) and not np.isnan(
+                frame_result["Bed_Time_us"]
+            ):
+                ice_thickness = self._calculate_ice_thickness(
+                    frame_result["Surface_Time_us"], frame_result["Bed_Time_us"]
+                )
+                frame_result["Ice_Thickness_m"] = ice_thickness
+
+            print(f"INFO: Updated frame {frame_idx} with manual picks:")
+            print(f"  CBD: {frame_result['CBD']}")  # ✅ FIX: Show CBD value
+            if manual_tx is not None and manual_tx < len(time_vals):
+                print(
+                    f"  Transmitter: {time_vals[manual_tx]:.2f} μs {'(Manual)' if overrides.get('transmitter') else '(Auto)'}"
+                )
+            if not np.isnan(frame_result["Surface_Time_us"]):
+                print(
+                    f"  Surface: {frame_result['Surface_Time_us']:.2f} μs {'(Manual)' if overrides.get('surface') else '(Auto)'}"
+                )
+            if not np.isnan(frame_result["Bed_Time_us"]):
+                print(
+                    f"  Bed: {frame_result['Bed_Time_us']:.2f} μs {'(Manual)' if overrides.get('bed') else '(Auto)'}"
+                )
+            if not np.isnan(frame_result["Ice_Thickness_m"]):
+                print(f"  Ice thickness: {frame_result['Ice_Thickness_m']:.1f} m")
+
+            # Update the main CSV file
+            main_csv_path = Path(self.output_dir) / f"{base_filename}_pick.csv"
+            main_npz_path = Path(self.output_dir) / f"{base_filename}_pick.npz"
+
+            if main_csv_path.exists():
+                # Load existing CSV data
+                existing_df = pd.read_csv(main_csv_path)
+
+                # ✅ FIX: Update only the specific columns, preserve CBD
+                frame_mask = existing_df["Frame"] == frame_idx
+                if frame_mask.any():
+                    # Update only the data columns that were manually changed
+                    update_columns = [
+                        "Surface_Time_us",
+                        "Bed_Time_us",
+                        "Ice_Thickness_m",
+                        "Surface_Power_dB",
+                        "Bed_Power_dB",
+                    ]
+
+                    for col in update_columns:
+                        if col in frame_result:
+                            existing_df.loc[frame_mask, col] = frame_result[col]
+
+                    # ✅ FIX: Ensure CBD is preserved/corrected
+                    existing_df.loc[frame_mask, "CBD"] = correct_cbd
+
+                    print(f"INFO: Updated frame {frame_idx} in existing CSV database")
+                else:
+                    # Append new row if frame doesn't exist
+                    new_row_df = pd.DataFrame([frame_result])
+                    existing_df = pd.concat(
+                        [existing_df, new_row_df], ignore_index=True
+                    )
+                    existing_df = existing_df.sort_values("Frame").reset_index(
+                        drop=True
+                    )
+                    print(f"INFO: Added frame {frame_idx} to CSV database")
+
+                # Save updated CSV
+                existing_df.to_csv(
+                    main_csv_path, index=False, float_format="%.6f", na_rep="NaN"
+                )
+                print(f"INFO: Updated main CSV database: {main_csv_path}")
+
+                # Update the main NPZ file
+                if main_npz_path.exists():
+                    # Load existing NPZ metadata
+                    try:
+                        npz_data = np.load(main_npz_path, allow_pickle=True)
+                        meta_info = (
+                            npz_data["meta"].item() if "meta" in npz_data else {}
+                        )
+                    except:
+                        meta_info = {}
+
+                    # Update metadata
+                    meta_info["last_manual_override"] = str(datetime.datetime.now())
+                    meta_info["manual_override_frame"] = frame_idx
+                    meta_info["override_types"] = [k for k, v in overrides.items() if v]
+                else:
+                    meta_info = {
+                        "ascope_file": base_filename,
+                        "processing_timestamp": str(datetime.datetime.now()),
+                        "ice_velocity_m_per_us": 168.0,
+                        "manual_override_frame": frame_idx,
+                        "override_types": [k for k, v in overrides.items() if v],
+                    }
+
+                # ✅ FIX: Save updated NPZ with corrected data from CSV
+                np.savez(
+                    main_npz_path,
+                    frame=existing_df["Frame"].values,
+                    cbd=existing_df["CBD"].values,  # ✅ FIX: Now has correct CBD values
+                    surface_time_us=existing_df["Surface_Time_us"].values,
+                    bed_time_us=existing_df["Bed_Time_us"].values,
+                    ice_thickness_m=existing_df["Ice_Thickness_m"].values,
+                    surface_power_db=existing_df["Surface_Power_dB"].values,
+                    bed_power_db=existing_df["Bed_Power_dB"].values,
+                    meta=meta_info,
+                )
+                print(f"INFO: Updated main NPZ database: {main_npz_path}")
+
+            else:
+                print("WARNING: Main CSV file not found, creating new database")
+                # Create new database with single frame
+                df = pd.DataFrame([frame_result])
+                df.to_csv(main_csv_path, index=False, float_format="%.6f", na_rep="NaN")
+
+                meta_info = {
+                    "ascope_file": base_filename,
+                    "processing_timestamp": str(datetime.datetime.now()),
+                    "ice_velocity_m_per_us": 168.0,
+                    "manual_override_frame": frame_idx,
+                    "override_types": [k for k, v in overrides.items() if v],
+                }
+
+                np.savez(
+                    main_npz_path,
+                    frame=df["Frame"].values,
+                    cbd=df["CBD"].values,
+                    surface_time_us=df["Surface_Time_us"].values,
+                    bed_time_us=df["Bed_Time_us"].values,
+                    ice_thickness_m=df["Ice_Thickness_m"].values,
+                    surface_power_db=df["Surface_Power_dB"].values,
+                    bed_power_db=df["Bed_Power_dB"].values,
+                    meta=meta_info,
+                )
+
+            # Reconstruct grid data and replace the existing picked.png file
+            try:
+                from functions.grid_detection import (
+                    detect_grid_lines_and_dotted,
+                    interpolate_regular_grid,
+                )
+
+                frame_img = frame_data["frame_img"]
+                h, w = frame_img.shape
+                ref_row = frame_data["calibration_data"]["ref_row"]
+                tx_pulse_col = frame_data["calibration_data"]["tx_pulse_col"]
+
+                # Re-detect grid lines for proper plotting
+                h_peaks_initial, v_peaks_initial, h_minor_peaks, v_minor_peaks = (
+                    detect_grid_lines_and_dotted(frame_img, self.config)
+                )
+
+                # Reconstruct grid data
+                y_range_dB = 8.25 * 10
+                y_major, y_minor = interpolate_regular_grid(
+                    h,
+                    h_peaks_initial,
+                    ref_row,
+                    self.physical_params["y_major_dB"],
+                    self.physical_params["y_minor_per_major"],
+                    y_range_dB,
+                    is_y_axis=True,
+                    config=self.config,
+                )
+
+                x_range_us = self.physical_params.get(
+                    "x_range_factor"
+                ) * self.physical_params.get("x_major_us")
+                x_major, x_minor = interpolate_regular_grid(
+                    w,
+                    v_peaks_initial,
+                    tx_pulse_col,
+                    self.physical_params["x_major_us"],
+                    self.physical_params["x_minor_per_major"],
+                    x_range_us,
+                    is_y_axis=False,
+                    config=self.config,
+                )
+
+            except Exception as e:
+                print(f"WARNING: Could not reconstruct grid data: {e}")
+                # Use empty grid data as fallback
+                y_major, y_minor, x_major, x_minor = [], [], [], []
+
+            # Replace the existing picked.png file
+            self._plot_combined_results(
+                frame_data["frame_img"],
+                frame_data["signal_x_clean"],
+                frame_data["signal_y_clean"],
+                x_major,  # Reconstructed grid data
+                y_major,  # Reconstructed grid data
+                x_minor,  # Reconstructed grid data
+                y_minor,  # Reconstructed grid data
+                frame_data["calibration_data"]["ref_row"],
+                base_filename,
+                frame_idx,
+                frame_data["calibration_data"]["tx_pulse_col"],
+                manual_tx,
+                manual_surface,
+                manual_bed,
+                power_vals,
+                time_vals,
+                frame_data["calibration_data"]["px_per_us_echo"],
+                frame_data["calibration_data"]["px_per_db_echo"],
+            )
+
+            print(
+                f"INFO: Replaced frame plot: {base_filename}_frame{frame_idx:02d}_picked.png"
+            )
+            return True
+
+        except Exception as e:
+            print(f"ERROR: Failed to save manual picks: {e}")
+            import traceback
+
+            traceback.print_exc()
+            return False
 
     def _plot_combined_results(
         self,
@@ -816,7 +1240,6 @@ class AScope:
             plot_max_db + 1,
             self.physical_params["y_major_dB"],
         )
-
         minor_db_per_major = self.physical_params["y_major_dB"] / (
             self.physical_params["y_minor_per_major"] + 1
         )
