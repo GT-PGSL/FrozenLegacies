@@ -80,6 +80,9 @@ def export_ascope_database(base_filename, output_dir, frame_results, meta_info=N
             ice_thickness_m=df["Ice_Thickness_m"].values,
             surface_power_db=df["Surface_Power_dB"].values,
             bed_power_db=df["Bed_Power_dB"].values,
+            transmitter_time_us=df["Transmitter_Time_us"].values,
+            transmitter_power_db=df["Transmitter_Power_dB"].values,
+            transmitter_x_pixel=df["Transmitter_X_pixel"].values,
             meta=meta_info,
         )
         print(f"INFO: Exported NPZ database to {npz_path}")
@@ -339,6 +342,9 @@ class AScope:
             "Ice_Thickness_m": np.nan,
             "Surface_Power_dB": np.nan,
             "Bed_Power_dB": np.nan,
+            "Transmitter_Time_us": np.nan,
+            "Transmitter_Power_dB": np.nan,
+            "Transmitter_X_pixel": np.nan,
         }
 
         try:
@@ -474,7 +480,7 @@ class AScope:
                 self.frame_results.append(frame_result)
                 return
 
-            # 8. Enhanced Echo Detection with Double TX Pulse Support
+            # 8. Detection with Double TX Pulse Support
             print("INFO: Starting enhanced echo detection...")
 
             # Call enhanced double transmitter pulse detection
@@ -497,12 +503,12 @@ class AScope:
                         f"INFO: Updated TX index to {tx_idx_in_clean} based on enhanced detection"
                     )
 
-            # Call enhanced surface detection
+            # Call surface detection
             surf_idx_in_clean = detect_surface_echo_adaptive(
                 power_vals, time_vals, tx_analysis, self.config
             )
 
-            # Call existing bed detection
+            # Call bed detection
             bed_idx_in_clean = detect_bed_echo(
                 power_vals, time_vals, surf_idx_in_clean, px_per_us_echo, self.config
             )
@@ -547,6 +553,25 @@ class AScope:
 
                 if not np.isnan(ice_thickness):
                     print(f"Ice thickness calculated: {ice_thickness:.1f} m")
+
+            # Store Transmitter Pulse Results
+            if (
+                tx_idx_in_clean is not None
+                and tx_idx_in_clean < len(time_vals)
+                and time_vals is not None
+                and power_vals is not None
+                and tx_pulse_col is not None
+            ):
+                tx_time = time_vals[tx_idx_in_clean]
+                tx_power = power_vals[tx_idx_in_clean]
+
+                frame_result["Transmitter_Time_us"] = tx_time
+                frame_result["Transmitter_Power_dB"] = tx_power
+                frame_result["Transmitter_X_pixel"] = tx_pulse_col
+
+                print(
+                    f"Transmitter pulse stored: {tx_time:.2f} μs, {tx_power:.1f} dB, X-pixel: {tx_pulse_col:.1f}"
+                )
 
             # 10. Plot Combined Results (renamed to "picked.png")
             self._plot_combined_results(
@@ -804,7 +829,7 @@ class AScope:
         Save frame results with manual pick overrides and update main database files.
         """
         try:
-            # ✅ FIX: Get CBD from existing data or calculate properly
+            # Get CBD
             if (
                 hasattr(self, "cbd_list")
                 and self.cbd_list
@@ -825,12 +850,15 @@ class AScope:
             # Create frame result with manual picks
             frame_result = {
                 "Frame": frame_idx,
-                "CBD": correct_cbd,  # ✅ FIX: Use correctly calculated CBD
+                "CBD": correct_cbd,
                 "Surface_Time_us": np.nan,
                 "Bed_Time_us": np.nan,
                 "Ice_Thickness_m": np.nan,
                 "Surface_Power_dB": np.nan,
                 "Bed_Power_dB": np.nan,
+                "Transmitter_Time_us": np.nan,
+                "Transmitter_Power_dB": np.nan,
+                "Transmitter_X_pixel": np.nan,
             }
 
             # Extract data
@@ -846,6 +874,13 @@ class AScope:
                 frame_result["Bed_Time_us"] = time_vals[manual_bed]
                 frame_result["Bed_Power_dB"] = power_vals[manual_bed]
 
+            if manual_tx is not None and manual_tx < len(time_vals):
+                frame_result["Transmitter_Time_us"] = time_vals[manual_tx]
+                frame_result["Transmitter_Power_dB"] = power_vals[manual_tx]
+                frame_result["Transmitter_X_pixel"] = frame_data["calibration_data"][
+                    "tx_pulse_col"
+                ]
+
             # Calculate ice thickness
             if not np.isnan(frame_result["Surface_Time_us"]) and not np.isnan(
                 frame_result["Bed_Time_us"]
@@ -856,7 +891,7 @@ class AScope:
                 frame_result["Ice_Thickness_m"] = ice_thickness
 
             print(f"INFO: Updated frame {frame_idx} with manual picks:")
-            print(f"  CBD: {frame_result['CBD']}")  # ✅ FIX: Show CBD value
+            print(f"  CBD: {frame_result['CBD']}")
             if manual_tx is not None and manual_tx < len(time_vals):
                 print(
                     f"  Transmitter: {time_vals[manual_tx]:.2f} μs {'(Manual)' if overrides.get('transmitter') else '(Auto)'}"
@@ -880,7 +915,7 @@ class AScope:
                 # Load existing CSV data
                 existing_df = pd.read_csv(main_csv_path)
 
-                # ✅ FIX: Update only the specific columns, preserve CBD
+                # Update only the specific columns, preserve CBD
                 frame_mask = existing_df["Frame"] == frame_idx
                 if frame_mask.any():
                     # Update only the data columns that were manually changed
@@ -890,6 +925,9 @@ class AScope:
                         "Ice_Thickness_m",
                         "Surface_Power_dB",
                         "Bed_Power_dB",
+                        "Transmitter_Time_us",
+                        "Transmitter_Power_dB",
+                        "Transmitter_X_pixel",
                     ]
 
                     for col in update_columns:
