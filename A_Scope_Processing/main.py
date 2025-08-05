@@ -6,15 +6,13 @@ import argparse
 import pandas as pd
 import numpy as np
 from pathlib import Path
+from ascope_processor import AScope
 
 # Get the directory of the current script (main.py)
 current_dir = os.path.dirname(os.path.abspath(__file__))
 
 # Add the current directory to Python path for imports
 sys.path.insert(0, current_dir)
-
-from ascope_processor import AScope
-
 
 def process_single_frame_interactive(
     input_file, frame_number, config_path=None, output_dir=None
