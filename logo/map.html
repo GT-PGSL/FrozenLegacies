@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Interactive Map</title>
+  <link rel="stylesheet" href="style.css">
+	<script type="module" src="https://js.arcgis.com/embeddable-components/4.33/arcgis-embeddable-components.esm.js"></script>
+</head>
+	
+<body>
+  <nav class="navbar">
+    <div class="container">
+      <div class="nav-brand">
+        <img src="image/frozen-logo.png" alt="Frozen Legacies Logo" class="logo-img">
+        <span class="nav-title">Frozen Legacies</span>
+      </div>
+      <ul class="nav-menu">
+        <li><a class="nav-link" href="index.html">Home</a></li>
+        <li><a class="nav-link" href="description.html">Project Description</a></li>
+        <li><a class="nav-link active" href="map.html">Interactive Map</a></li>
+        <li><a class="nav-link" href="codes.html">Code Demo</a></li>
+        <li><a class="nav-link" href="team.html">Team</a></li>
+        <li><a class="nav-link" href="contact.html">Contact</a></li>
+      </ul>
+      <button class="mobile-menu-toggle" aria-label="Toggle menu">
+        <span></span><span></span><span></span>
+      </button>
+    </div>
+  </nav>
+	
+	<main class="map-main-content container">
+	  <section class="map-card map-header">
+		<h1>Frozen Legacies Interactive Map</h1>
+		<div class="section-divider"></div>
+		<p class="lead-text">This interactive map provides access to digitized radar flight lines and data from the 1974–75 SPRI/TUD/NSF airborne surveys over the Ross Ice Shelf. The map allows users to explore survey tracks and view or download selected datasets for further analysis.</p>
+	  </section>
+
+	<section class="map-card">
+		<h2>Available Datasets</h2>
+		<ul class="dataset-list">
+		  <li><strong>BAS Antarctica basemap and coastline:</strong> Used as the base layer for all mapping.</li>
+		  <li><strong>SPRI/TUD/NSF airborne radar flight lines:</strong> Digitized from 1974–75 Ross Ice Shelf surveys.</li>
+		  <li><strong>Echogram (Z-scope) data:</strong> Browse and download via the interactive map.</li>
+		  <li><strong>Power vs. depth (A-scope) data:</strong> Browse and download via the interactive map.</li>
+		</ul>
+	</section>
+
+	<section class="arcgis-embed-wrapper">
+	  <arcgis-embedded-map
+		style="height:600px;width:100%;border-radius:16px;"
+		item-id="de95bd2c2b884bc0813d680c31acdc43"
+		theme="light"
+		heading-enabled
+		legend-enabled
+		share-enabled
+		center="-28.09422334368561,-84.27989650181141"
+		scale="28268905.73997767"
+		portal-url="https://gtmaps.maps.arcgis.com"
+	  ></arcgis-embedded-map>
+	  <div class="map-caption">
+		Explore radar flight lines and datasets from the 1974–75 SPRI/TUD/NSF airborne surveys.
+	  </div>
+	  <a
+		class="btn btn--outline map-external-link"
+		href="https://gtmaps.maps.arcgis.com/home/webmap/viewer.html?webmap=de95bd2c2b884bc0813d680c31acdc43"
+		target="_blank" rel="noopener"
+		title="Open interactive map in a new tab"
+	  >
+		<i class="fas fa-external-link-alt"></i> Open Map in New Tab
+	  </a>
+	</section>
+
+
+  <section class="map-card map-contact">
+    <strong>Contact:</strong> info@frozenlegacies.org<br>
+    <strong>Project Leads:</strong> Winnie Chu, Angelo Tarzona
+  </section>
+</main>
+
+
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-content">
+        <div class="footer-section">
+          <h3>About the Project</h3>
+          <p>Frozen Legacies is a collaborative research initiative funded by the National Science Foundation (NSF) to investigate long-term changes beneath Antarctica’s Ross Ice Shelf using both historical and modern radar data.</p>
+        </div>
+        <div class="footer-section">
+          <h3>Contact</h3>
+          <p>Email: info@frozenlegacies.org<br>
+          Project Leads: Winnie Chu, Angelo Tarzona</p>
+        </div>
+        <div class="footer-section">
+          <img src="image/nsf-logo.png" alt="NSF Logo" style="height:48px;">
+          <p>NSF Award #2049332</p>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <p>&copy; 2025 Frozen Legacies. All rights reserved.</p>
+      </div>
+    </div>
+  </footer>
+	
+  <script>
+    function openTab(evt, tabName) {
+      var i, tabcontent, tablinks;
+      tabcontent = document.getElementsByClassName("tabcontent");
+      for (i = 0; i < tabcontent.length; i++) {
+        tabcontent[i].style.display = "none";
+      }
+      tablinks = document.getElementsByClassName("tablinks");
+      for (i = 0; i < tablinks.length; i++) {
+        tablinks[i].className = tablinks[i].className.replace(" active", "");
+      }
+      document.getElementById(tabName).style.display = "block";
+      evt.currentTarget.className += " active";
+    }
+  </script>
+</body>
+</html>

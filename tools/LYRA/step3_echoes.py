@@ -1,0 +1,473 @@
+"""
+step3_echoes.py — LYRA Step 3: Surface/bed echo extraction
+==========================================================
+For each calibrated frame (from step2 CSV) extract surface and bed echoes:
+
+  • Noise floor estimation (pre-bang 75th-percentile baseline)
+  • Echo peak detection  (prominence ≥ 5 dB, distance ≥ 80 px)
+  • Envelope walking at +5 dB and +10 dB above noise floor
+  • Waveform shape metrics: peakiness, asymmetry, trailing_tail, leading_rise
+  • Derived geometry:
+      h_air_m  = surface_twt / 2 × c_air   (air column height)
+      h_ice_m  = (bed_twt − surface_twt) / 2 × c_ice   (ice thickness)
+      h_eff_m  = h_air_m + h_ice_m / n_ice   (effective propagation distance)
+
+Echo status:
+  good       — surface + bed detected, bed SNR ≥ WEAK_BED_SNR_DB (5 dB)
+  weak_bed   — bed detected but SNR < WEAK_BED_SNR_DB (marginal; inspect figure)
+  no_bed     — surface detected, no bed echo found
+  no_surface — surface not detected; geometry undefined
+
+Per-frame calibration is taken directly from the step2 CSV (mb_x, y_ref_px,
+db_per_px, us_per_px).  Detection parameters (prominence, distance, Gaussian σ)
+are taken from DEFAULT_CAL.
+
+Usage
+-----
+Run from repo root:
+
+    python tools/LYRA/step3_echoes.py [TIFF_PATH]
+
+If TIFF_PATH is omitted, defaults to the F125 training TIFF (40_0008400…).
+
+Outputs
+-------
+Per-flight echo CSV (updated incrementally):
+    tools/LYRA/output/F{FLT}/step3/F{FLT}_step3_echoes.csv
+      Columns: flight, tiff, cbd, file_id, echo_status,
+               noise_floor_dB,
+               surface_twt_us, surface_power_dB, surface_snr_dB,
+               surface_width_10_us, surface_width_5_us, surface_peakiness,
+               surface_asymmetry, surface_leading_rise_us, surface_trailing_tail_us,
+               bed_twt_us, bed_power_dB, bed_snr_dB,
+               bed_width_10_us, bed_width_5_us, bed_peakiness,
+               bed_asymmetry, bed_leading_rise_us, bed_trailing_tail_us,
+               h_air_m, h_ice_m, h_eff_m
+
+Per-frame diagnostic figure (two-panel):
+    tools/LYRA/output/F{FLT}/step3/F{FLT}_{file_id}_step3.png
+      Left  : frame image with echo markers (pixel space, same scale as step2)
+      Right : waveform in physical units (TWT µs vs power dB)
+"""
+
+from pathlib import Path
+import sys
+
+import numpy as np
+import pandas as pd
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from PIL import Image
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "tools/LYRA"))
+
+from lyra import (
+    DEFAULT_CAL,
+    extract_trace, estimate_noise_floor,
+    detect_echoes, compute_echo_metrics,
+    px_to_db, px_to_us,
+    C_AIR_M_PER_US, C_ICE_M_PER_US,
+    ensure_canonical_name, tiff_id,
+)
+
+# ── Scientific constants ───────────────────────────────────────────────────────
+N_ICE           = 1.78   # refractive index of ice (Neal 1977)
+WEAK_BED_SNR_DB = 5.0    # bed SNR threshold below which status = "weak_bed"
+
+# ── Resolve TIFF path ──────────────────────────────────────────────────────────
+if len(sys.argv) > 1:
+    TIFF = Path(sys.argv[1])
+    if not TIFF.is_absolute():
+        TIFF = ROOT / TIFF
+else:
+    TIFF = ROOT / "Data/ascope/raw/125/40_0008400_0008424-reel_begin_end.tiff"
+
+TIFF = ensure_canonical_name(TIFF)
+
+try:
+    FLT = int(TIFF.parent.name)
+except ValueError:
+    FLT = 0
+
+
+TIFF_ID   = tiff_id(TIFF)
+OUT_DIR   = ROOT / f"tools/LYRA/output/F{FLT}"
+STEP1_DIR = OUT_DIR / "step1"
+STEP2_DIR = OUT_DIR / "step2"
+STEP3_DIR = OUT_DIR / "step3"
+STEP3_DIR.mkdir(parents=True, exist_ok=True)
+
+INDEX_CSV  = STEP1_DIR / f"F{FLT}_frame_index.csv"
+CAL_CSV    = STEP2_DIR / f"F{FLT}_step2_cal.csv"
+ECHO_CSV   = STEP3_DIR / f"F{FLT}_step3_echoes.csv"
+
+# ── Validate prerequisites ─────────────────────────────────────────────────────
+if not INDEX_CSV.exists():
+    sys.exit(f"ERROR: frame index not found at {INDEX_CSV}\n"
+             "Run step1_detect_frames.py first.")
+
+if not CAL_CSV.exists():
+    sys.exit(f"ERROR: step2 calibration CSV not found at {CAL_CSV}\n"
+             "Run step2_calibrate.py first.")
+
+# ── Load step1 frame index ─────────────────────────────────────────────────────
+index     = pd.read_csv(INDEX_CSV, dtype=str)
+tiff_rows = index[index["tiff"] == TIFF.name].copy()
+
+if len(tiff_rows) == 0:
+    sys.exit(f"ERROR: {TIFF.name} not found in frame index.\n"
+             "Run step1_detect_frames.py for this TIFF first.")
+
+# ── Load step2 calibration CSV ─────────────────────────────────────────────────
+cal_df    = pd.read_csv(CAL_CSV, dtype=str)
+tiff_cals = cal_df[cal_df["tiff"] == TIFF.name].copy()
+
+if len(tiff_cals) == 0:
+    sys.exit(f"ERROR: No step2 calibration rows for {TIFF.name} in {CAL_CSV}\n"
+             "Run step2_calibrate.py for this TIFF first.")
+
+# Build frame_idx → calibration dict mapping (skip excluded frames)
+frame_cal: dict[int, dict] = {}
+for _, row in tiff_cals.iterrows():
+    # Skip excluded frames (empty mb_x means no calibration was performed)
+    if row.get("exclude_reason", "") not in ("", "nan") and str(row.get("exclude_reason", "")) not in ("", "nan"):
+        print(f"  Skipping frame {row['frame_idx']} ({row.get('cbd','?')}): {row['exclude_reason']}")
+        continue
+    if not row["mb_x"] or str(row["mb_x"]).strip() == "":
+        continue
+    fidx = int(row["frame_idx"])
+    frame_cal[fidx] = dict(
+        mb_x        = int(float(row["mb_x"])),
+        y_ref_px    = float(row["y_ref_px"]),
+        db_per_px   = float(row["db_per_px"]),
+        us_per_px   = float(row["us_per_px"]),
+        cbd         = row["cbd"],
+        file_id     = row["file_id"],
+        tiff_id     = row.get("tiff_id", TIFF_ID),
+    )
+
+print(f"\nLYRA Step 3 — {TIFF.name}")
+print(f"  Flight : F{FLT}  |  tiff_id : {TIFF_ID}")
+print(f"  Calibrated frames in step2 CSV : {len(frame_cal)}\n")
+
+# ── Load TIFF image ────────────────────────────────────────────────────────────
+print("Loading TIFF ...")
+Image.MAX_IMAGE_PIXELS = None
+img      = np.array(Image.open(TIFF), dtype=np.float32)
+img_norm = (img - img.min()) / (img.max() - img.min() + 1e-9)
+H, W_img = img_norm.shape
+print(f"  Image  : {W_img} × {H} px\n")
+
+# ── Build per-frame cal dict from step2 values + DEFAULT_CAL detection params ─
+def _make_cal(fc: dict) -> dict:
+    """Merge per-frame step2 calibration values into DEFAULT_CAL."""
+    cal = DEFAULT_CAL.copy()
+    cal["mb_x"]     = fc["mb_x"]     # already in frame, but passed separately
+    cal["y_ref_px"] = fc["y_ref_px"]
+    cal["db_per_px"]= fc["db_per_px"]
+    cal["us_per_px"]= fc["us_per_px"]
+    # y_ref_db stays at −60 dB (reference is always picked at −60 dB line)
+    return cal
+
+
+# ── Per-frame echo extraction ──────────────────────────────────────────────────
+print(f"  {'Fr':>3}  {'CBD':>6}  {'Status':^12}  {'NF':>6}  "
+      f"{'Srf TWT':>8}  {'Srf dB':>7}  "
+      f"{'Bed TWT':>8}  {'Bed dB':>7}  {'Bed SNR':>7}  "
+      f"{'h_air':>7}  {'h_ice':>7}")
+print("  " + "─" * 90)
+
+echo_rows = []
+
+for _, idx_row in tiff_rows.iterrows():
+    frame_idx  = int(idx_row["frame_idx"])
+    frame_type = idx_row["frame_type"]
+
+    if frame_type == "partial":
+        continue
+    if frame_idx not in frame_cal:
+        # Frame was excluded in step2 (or step2 hasn't been run for this frame)
+        continue
+
+    fc      = frame_cal[frame_idx]
+    cbd     = fc["cbd"]
+    file_id = fc["file_id"]
+    mb_x    = fc["mb_x"]
+
+    left_px  = int(idx_row["left_px"])
+    right_px = int(idx_row["right_px"])
+    frame    = img_norm[:, left_px : right_px + 1]
+    frame_w  = frame.shape[1]
+
+    cal = _make_cal(fc)
+
+    # ── Extract trace and noise floor ──────────────────────────────────────────
+    # Use robust mode: constrained-argmin rejects film-grain artefacts and
+    # T/R ringing noise that would otherwise create fake peaks in the flat
+    # region between the main bang and the first real echo.
+    trace_y, trace_y_s = extract_trace(frame, cal, robust=True, mb_x=mb_x)
+    noise_floor_dB     = estimate_noise_floor(trace_y_s, mb_x, cal)
+
+    # ── Detect surface and bed echoes ──────────────────────────────────────────
+    surface_x, bed_x = detect_echoes(trace_y_s, mb_x, noise_floor_dB, cal)
+
+    # ── Compute echo metrics ───────────────────────────────────────────────────
+    surface = compute_echo_metrics(
+        trace_y_s, surface_x, noise_floor_dB, mb_x, frame_w, cal, trace_y=trace_y
+    ) if surface_x is not None else None
+
+    bed = compute_echo_metrics(
+        trace_y_s, bed_x, noise_floor_dB, mb_x, frame_w, cal, trace_y=trace_y
+    ) if bed_x is not None else None
+
+    # ── Classify echo_status ───────────────────────────────────────────────────
+    if surface is None:
+        echo_status = "no_surface"
+    elif bed is None:
+        echo_status = "no_bed"
+    elif bed.peak_snr_dB < WEAK_BED_SNR_DB:
+        echo_status = "weak_bed"
+    else:
+        echo_status = "good"
+
+    # ── Derived geometry ───────────────────────────────────────────────────────
+    h_air_m = h_ice_m = h_eff_m = np.nan
+    if surface is not None:
+        h_air_m = surface.peak_twt_us / 2.0 * C_AIR_M_PER_US
+    if surface is not None and bed is not None:
+        h_ice_m = (bed.peak_twt_us - surface.peak_twt_us) / 2.0 * C_ICE_M_PER_US
+        h_eff_m = h_air_m + h_ice_m / N_ICE
+
+    # ── Print summary line ─────────────────────────────────────────────────────
+    srf_twt = f"{surface.peak_twt_us:8.3f}" if surface else f"{'—':>8}"
+    srf_db  = f"{surface.peak_power_dB:+7.1f}" if surface else f"{'—':>7}"
+    bed_twt = f"{bed.peak_twt_us:8.3f}" if bed else f"{'—':>8}"
+    bed_db  = f"{bed.peak_power_dB:+7.1f}" if bed else f"{'—':>7}"
+    bed_snr = f"{bed.peak_snr_dB:+7.1f}" if bed else f"{'—':>7}"
+    h_air_s = f"{h_air_m:7.0f}" if not np.isnan(h_air_m) else f"{'—':>7}"
+    h_ice_s = f"{h_ice_m:7.0f}" if not np.isnan(h_ice_m) else f"{'—':>7}"
+
+    print(f"  {frame_idx:>3}  {str(cbd):>6}  {echo_status:^12}  "
+          f"{noise_floor_dB:+6.1f}  "
+          f"{srf_twt}  {srf_db}  "
+          f"{bed_twt}  {bed_db}  {bed_snr}  "
+          f"{h_air_s}  {h_ice_s}")
+
+    # ── Build output row ───────────────────────────────────────────────────────
+    def _e(echo, attr):
+        return getattr(echo, attr, np.nan) if echo is not None else np.nan
+
+    echo_rows.append(dict(
+        flight      = FLT,
+        tiff        = TIFF.name,
+        tiff_id     = TIFF_ID,
+        frame_idx   = frame_idx,
+        cbd         = cbd,
+        file_id     = file_id,
+        mb_x        = mb_x,
+        echo_status = echo_status,
+        noise_floor_dB = round(noise_floor_dB, 2),
+        # Surface echo
+        surface_twt_us        = round(_e(surface, "peak_twt_us"),     4),
+        surface_power_dB      = round(_e(surface, "peak_power_dB"),   2),
+        surface_snr_dB        = round(_e(surface, "peak_snr_dB"),     2),
+        surface_width_10_us   = round(_e(surface, "width_10_us"),     4),
+        surface_width_5_us    = round(_e(surface, "width_5_us"),      4),
+        surface_peakiness     = round(_e(surface, "peakiness"),       3),
+        surface_asymmetry     = round(_e(surface, "asymmetry"),       3),
+        surface_leading_rise_us  = round(_e(surface, "leading_rise_us"),  4),
+        surface_trailing_tail_us = round(_e(surface, "trailing_tail_us"), 4),
+        # Bed echo
+        bed_twt_us            = round(_e(bed, "peak_twt_us"),    4),
+        bed_power_dB          = round(_e(bed, "peak_power_dB"),  2),
+        bed_snr_dB            = round(_e(bed, "peak_snr_dB"),    2),
+        bed_width_10_us       = round(_e(bed, "width_10_us"),    4),
+        bed_width_5_us        = round(_e(bed, "width_5_us"),     4),
+        bed_peakiness         = round(_e(bed, "peakiness"),      3),
+        bed_asymmetry         = round(_e(bed, "asymmetry"),      3),
+        bed_leading_rise_us   = round(_e(bed, "leading_rise_us"),  4),
+        bed_trailing_tail_us  = round(_e(bed, "trailing_tail_us"), 4),
+        # Geometry
+        h_air_m = round(h_air_m, 1) if not np.isnan(h_air_m) else np.nan,
+        h_ice_m = round(h_ice_m, 1) if not np.isnan(h_ice_m) else np.nan,
+        h_eff_m = round(h_eff_m, 1) if not np.isnan(h_eff_m) else np.nan,
+    ))
+
+    # ── Generate two-panel diagnostic figure ──────────────────────────────────
+    fig = plt.figure(figsize=(18, 5), constrained_layout=True)
+    fig.patch.set_facecolor("white")
+    gs  = fig.add_gridspec(1, 3, wspace=0.08)
+    ax_img  = fig.add_subplot(gs[0, :2])   # left 2/3: frame image
+    ax_wave = fig.add_subplot(gs[0, 2])    # right 1/3: waveform
+
+    # ── Left panel: frame image with echo markers ──────────────────────────────
+    fw = frame.shape[1]
+    ax_img.imshow(frame, cmap="gray", vmin=0, vmax=1, aspect="auto",
+                  extent=[0, fw, frame.shape[0], 0])
+
+    # Noise floor reference row (cyan)
+    y_ref_px = cal["y_ref_px"]
+    ax_img.axhline(y_ref_px, color="cyan", lw=1.2, ls="--", alpha=0.8,
+                   label=f"−60 dB  y={y_ref_px:.0f}")
+
+    # Main bang (red dashed vertical)
+    ax_img.axvline(mb_x, color="red", lw=1.5, ls="--", alpha=0.9,
+                   label=f"MB  x={mb_x}")
+
+    # Trace overlay (magenta, thin)
+    x_all = np.arange(frame_w)
+    ax_img.plot(x_all, trace_y_s, color="magenta", lw=0.8, alpha=0.7,
+                label="trace")
+
+    # Surface echo marker (green triangle) — use actual peak_y, not smoothed
+    if surface is not None:
+        ax_img.plot(surface_x, surface.peak_y, marker="^", color="lime", markersize=9,
+                    zorder=5, label=f"Srf {surface.peak_twt_us:.2f}µs")
+        ax_img.axvline(surface_x, color="lime", lw=0.8, ls=":", alpha=0.7)
+
+    # Bed echo marker (orange triangle) — use actual peak_y, not smoothed
+    if bed is not None:
+        ax_img.plot(bed_x, bed.peak_y, marker="^", color="orange", markersize=9,
+                    zorder=5, label=f"Bed {bed.peak_twt_us:.2f}µs")
+        ax_img.axvline(bed_x, color="orange", lw=0.8, ls=":", alpha=0.7)
+
+    ax_img.set_ylim(DEFAULT_CAL["y_disp_hi"] + 50, DEFAULT_CAL["y_disp_lo"] - 50)
+    ax_img.set_xlim(0, fw)
+    ax_img.set_xlabel("Column (px, frame-relative)", fontsize=8)
+    ax_img.set_ylabel("Row (px)", fontsize=8)
+    ax_img.spines["top"].set_visible(False)
+    ax_img.spines["right"].set_visible(False)
+    ax_img.legend(fontsize=7, loc="upper right", framealpha=0.6,
+                  facecolor="black", labelcolor="white")
+
+    status_color = {"good": "lime", "weak_bed": "gold",
+                    "no_bed": "tomato", "no_surface": "red"}.get(echo_status, "white")
+    ax_img.set_title(
+        f"LYRA Step 3 — F{FLT} {file_id}  |  "
+        f"NF={noise_floor_dB:.1f} dB  "
+        f"status=",
+        fontsize=8, loc="left",
+    )
+    # Append colored status text
+    ax_img.set_title(
+        f"LYRA Step 3 — F{FLT} {file_id}  |  NF={noise_floor_dB:.1f} dB  "
+        f"[{echo_status}]",
+        fontsize=8, loc="left", color="black",
+    )
+
+    # ── Right panel: waveform in physical units ────────────────────────────────
+    # Convert trace from pixel-row to dB, columns to TWT
+    twt_arr   = px_to_us(np.arange(frame_w, dtype=float), mb_x, cal)
+    power_arr = px_to_db(trace_y_s, cal)
+
+    # Show window: from mb_skip_us to 25 µs (covers typical RIS geometry)
+    t_lo = float(cal["mb_skip_us"])
+    t_hi = 25.0
+    mask = (twt_arr >= t_lo) & (twt_arr <= t_hi)
+
+    ax_wave.plot(twt_arr[mask], power_arr[mask],
+                 color="black", lw=1.2, label="waveform")
+
+    # Noise floor (gray dashed)
+    ax_wave.axhline(noise_floor_dB, color="gray", lw=1.0, ls="--",
+                    alpha=0.8, label=f"NF {noise_floor_dB:.1f} dB")
+
+    # NF+5 and NF+10 thresholds (light gray dotted)
+    ax_wave.axhline(noise_floor_dB + 5.0, color="silver", lw=0.7, ls=":",
+                    alpha=0.8, label="NF+5 dB")
+    ax_wave.axhline(noise_floor_dB + 10.0, color="darkgray", lw=0.7, ls=":",
+                    alpha=0.8, label="NF+10 dB")
+
+    # Surface echo
+    if surface is not None:
+        ax_wave.axvline(surface.peak_twt_us, color="limegreen", lw=1.0, ls="--",
+                        alpha=0.8)
+        ax_wave.plot(surface.peak_twt_us, surface.peak_power_dB,
+                     marker="^", color="limegreen", markersize=9, zorder=5,
+                     label=f"Srf {surface.peak_twt_us:.2f}µs  {surface.peak_power_dB:.1f}dB")
+        # Envelope shading at +10 dB
+        if not np.isnan(surface.lead_10_us) and not np.isnan(surface.trail_10_us):
+            ax_wave.axvspan(surface.lead_10_us, surface.trail_10_us,
+                            alpha=0.08, color="limegreen")
+
+    # Bed echo
+    if bed is not None:
+        ax_wave.axvline(bed.peak_twt_us, color="darkorange", lw=1.0, ls="--",
+                        alpha=0.8)
+        ax_wave.plot(bed.peak_twt_us, bed.peak_power_dB,
+                     marker="^", color="darkorange", markersize=9, zorder=5,
+                     label=f"Bed {bed.peak_twt_us:.2f}µs  {bed.peak_power_dB:.1f}dB\n"
+                           f"SNR={bed.peak_snr_dB:.1f}dB  peak={bed.peakiness:.2f}")
+        # Envelope shading at +10 dB
+        if not np.isnan(bed.lead_10_us) and not np.isnan(bed.trail_10_us):
+            ax_wave.axvspan(bed.lead_10_us, bed.trail_10_us,
+                            alpha=0.10, color="darkorange")
+
+    # Axis formatting
+    p_floor = noise_floor_dB - 5.0
+    p_ceil  = noise_floor_dB + 50.0
+    ax_wave.set_ylim(p_floor, p_ceil)
+    ax_wave.set_xlim(t_lo, t_hi)
+    ax_wave.set_xlabel("TWT from MB (µs)", fontsize=8)
+    ax_wave.set_ylabel("Power (dB)", fontsize=8)
+    ax_wave.spines["top"].set_visible(False)
+    ax_wave.spines["right"].set_visible(False)
+    ax_wave.legend(fontsize=6.5, loc="upper right", framealpha=0.85)
+    ax_wave.tick_params(labelsize=7)
+    ax_wave.set_title("Waveform", fontsize=8, loc="left")
+
+    # Geometry annotation
+    if not np.isnan(h_air_m) and not np.isnan(h_ice_m):
+        ax_wave.text(
+            0.02, 0.05,
+            f"h_air={h_air_m:.0f} m\nh_ice={h_ice_m:.0f} m\nh_eff={h_eff_m:.0f} m",
+            transform=ax_wave.transAxes, fontsize=7,
+            va="bottom", ha="left",
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="white",
+                      edgecolor="gray", alpha=0.8),
+        )
+
+    fig_path = STEP3_DIR / f"F{FLT}_{file_id}_step3.png"
+    fig.savefig(fig_path, dpi=150, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+
+
+# ── Update echo CSV (incremental, TIFF-specific rows) ─────────────────────────
+if echo_rows:
+    new_df = pd.DataFrame(echo_rows)
+    if ECHO_CSV.exists():
+        existing = pd.read_csv(ECHO_CSV, dtype=str)
+        existing = existing[existing["tiff"] != TIFF.name]
+        merged   = pd.concat([existing, new_df.astype(str)], ignore_index=True)
+    else:
+        merged = new_df.astype(str)
+    merged.to_csv(ECHO_CSV, index=False)
+
+    # ── Summary statistics ─────────────────────────────────────────────────────
+    print(f"\n{'─' * 60}")
+    print(f"  Echo CSV → {ECHO_CSV.relative_to(ROOT)}")
+    print(f"  Step 3 figures → {STEP3_DIR.relative_to(ROOT)}/")
+    print(f"  Frames processed : {len(echo_rows)}")
+
+    statuses = [r["echo_status"] for r in echo_rows]
+    for st in ["good", "weak_bed", "no_bed", "no_surface"]:
+        n = statuses.count(st)
+        if n:
+            print(f"    {st:12s}: {n}")
+
+    good_rows = [r for r in echo_rows if r["echo_status"] in ("good", "weak_bed")]
+    if good_rows:
+        h_airs = [r["h_air_m"] for r in good_rows
+                  if not (isinstance(r["h_air_m"], float) and np.isnan(r["h_air_m"]))]
+        h_ices = [r["h_ice_m"] for r in good_rows
+                  if not (isinstance(r["h_ice_m"], float) and np.isnan(r["h_ice_m"]))]
+        if h_airs:
+            print(f"  h_air  : {np.mean(h_airs):.0f} ± {np.std(h_airs):.0f} m "
+                  f"(n={len(h_airs)})")
+        if h_ices:
+            print(f"  h_ice  : {np.mean(h_ices):.0f} ± {np.std(h_ices):.0f} m "
+                  f"(n={len(h_ices)})")
+
+print("\nDone.")

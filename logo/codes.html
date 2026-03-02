@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Code Demo</title>
+  <link href="https://fonts.googleapis.com/css2?family=Iceberg&family=Montserrat:wght@400;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+	<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+</head>
+	
+<body>
+  <nav class="navbar">
+    <div class="container">
+      <div class="nav-brand">
+        <img src="image/frozen-logo.png" alt="Frozen Legacies Logo" class="logo-img" />
+        <span class="nav-title">Frozen Legacies</span>
+      </div>
+      <ul class="nav-menu">
+        <li><a class="nav-link" href="index.html">Home</a></li>
+        <li><a class="nav-link" href="description.html">Project Description</a></li>
+        <li><a class="nav-link" href="map.html">Interactive Map</a></li>
+        <li><a class="nav-link active" href="codes.html">Code Demo</a></li>
+        <li><a class="nav-link" href="#">Team</a></li>
+        <li><a class="nav-link" href="#">Contact</a></li>
+      </ul>
+      <button class="mobile-menu-toggle" aria-label="Toggle menu">
+        <span></span><span></span><span></span>
+      </button>
+    </div>
+  </nav>
+
+    <!-- Hero Section with Gray Tint -->
+    <section class="hero hero--codes">
+      <div class="hero-content">
+        <h1 class="hero-title">Explore Ice-Penetrating Radar with Jupyter Notebooks</h1>
+        <p class="hero-subtitle">Try our interactive demo to visualize and analyze radar data from Antarctica’s Ross Ice Shelf—no installation required!</p>
+      </div>
+    </section>
+	
+	
+  <div class="main-content">
+
+    <div class="container">
+      <div class="page-header">
+        <h1 class="page-title">Code Demos</h1>
+        <p class="page-subtitle">Interact with real scientific data and learn how researchers study ice shelves.</p>
+      </div>
+
+      <!-- Quick Start Card -->
+<div class="card quickstart-card">
+  <div class="quickstart-two-column">
+    <!-- Left column: text and links -->
+    <div class="quickstart-text">
+      <div class="section-header-with-icon">
+        <span class="section-icon"><i class="fas fa-rocket" aria-hidden="true"></i></span>
+        <h2>Quick Start: Run the Demo in Google Colab</h2>
+      </div>
+      <p class="quickstart-blurb">
+        <i class="fas fa-lightbulb" aria-hidden="true"></i>
+        Experience real polar science with a hands-on, beginner-friendly coding activity.
+      </p>
+      <div class="callout-box">
+        <i class="fas fa-user-graduate" aria-hidden="true"></i>
+        <strong>Designed for students and educators—no prior coding experience needed!</strong>
+      </div>
+      <div class="action-row">
+        <span class="action-label"><strong>Step 1: Try the Demo:</strong></span>
+        <a href="https://colab.research.google.com/github/GT-PGSL/FrozenLegacies/blob/main/Demo/demo_zscope.ipynb"
+           class="btn btn--primary" target="_blank">
+          <i class="fab fa-google-drive"></i> Open in Colab
+        </a>
+      </div>
+      <div class="action-row">
+        <span class="action-label"><strong>Step 2: Download the Notebook:</strong></span>
+        <a href="https://github.com/GT-PGSL/FrozenLegacies/blob/main/Demo/demo_zscope.ipynb"
+           class="btn btn--secondary" target="_blank">
+          <i class="fab fa-github"></i> Download from GitHub
+        </a>
+      </div>
+    </div>
+    <!-- Right column: screenshot and caption -->
+    <div class="quickstart-image">
+      <figure>
+        <img src="image/demo.png" alt="Screenshot of the Frozen Legacies Z-scope radar echogram Jupyter notebook showing a radargram and learning objectives." class="thumbnail-image">
+        <figcaption class="map-thumbnail-caption">Example of a Z-scope radar echogram visualized in the demo notebook.</figcaption>
+      </figure>
+    </div>
+  </div>
+</div>
+
+
+
+
+     <!-- What You’ll Learn Section -->
+<div class="card learn-card">
+  <div class="section-header-with-icon">
+    <span class="section-icon"><i class="fas fa-graduation-cap" aria-hidden="true"></i></span>
+    <h2>What You’ll Learn</h2>
+  </div>
+  <p class="section-intro">This demo is designed to help you build real-world science and coding skills. You will:</p>
+  <ul class="learn-list">
+    <li><span class="emoji-bullet">🔍</span> <strong>Load and visualize Z-scope radar data</strong></li>
+    <li><span class="emoji-bullet">🧊</span> <strong>Identify the ice surface and bed echoes in radar images</strong></li>
+    <li><span class="emoji-bullet">📊</span> <strong>Interpret radargrams and understand ice thickness and structure</strong></li>
+    <li><span class="emoji-bullet">💻</span> <strong>Use Python code to analyze real scientific data</strong></li>
+  </ul>
+</div>
+
+<!-- Step-by-Step Guide Section -->
+<div class="card steps-card">
+  <div class="section-header-with-icon">
+    <span class="section-icon"><i class="fas fa-list-ol" aria-hidden="true"></i></span>
+    <h2>Step-by-Step Guide</h2>
+  </div>
+  <p class="section-intro">Follow these steps to get started with the notebook:</p>
+  <ol class="steps-list">
+    <li><strong>Open the Notebook:</strong> Use the Google Colab link above or download the notebook from GitHub.</li>
+    <li><strong>Run the Cells:</strong> Click on each cell and press “Run” to execute the code and see the results.</li>
+    <li><strong>Explore the Data:</strong> Follow the instructions in the notebook to visualize radar echograms and experiment with the data.</li>
+    <li><strong>Learn and Adapt:</strong> Modify the code to see how changes affect the results, and try answering the questions included in the notebook.</li>
+  </ol>
+</div>
+
+
+     <div class="card educational-card">
+  <div class="section-header-with-icon">
+    <span class="section-icon"><i class="fas fa-book-open"></i></span>
+    <h2>Educational Resources</h2>
+  </div>
+  <div class="edu-didyouknow">
+    <strong>Did you know?</strong>
+    <ul class="edu-glossary">
+      <li><span class="emoji-bullet">📡</span> <strong>Radargram:</strong> A radar image showing subsurface reflections.</li>
+      <li><span class="emoji-bullet">🌊</span> <strong>Echogram:</strong> Another term for a radargram, often used in marine or ice studies.</li>
+      <li><span class="emoji-bullet">🖼️</span> <strong>Z-Scope:</strong> A type of 2D radar image that shows signal strength over time or depth.</li>
+      <li><span class="emoji-bullet">📈</span> <strong>A-Scope:</strong> A 1D depth profile that shows signal strength over time or depth.</li>
+    </ul>
+  </div>
+  <div class="edu-further">
+    <strong>Further Reading</strong>
+    <ul>
+      <li><a href="https://lindzey.github.io/blog/2015/07/27/a-brief-introduction-to-ice-penetrating-radar/" target="_blank">A Brief Introduction to Ice-Penetrating Radar</a></li>
+      <li><a href="https://www.youtube.com/watch?v=HW29067qVWk" target="_blank">Jupyter Notebook Tutorial (YouTube)</a></li>
+    </ul>
+  </div>
+</div>
+
+      <!-- Code Repository Card -->
+	<div class="card code-repo-card">
+	  <div class="section-header-with-icon">
+		<span class="section-icon"><i class="fas fa-code"></i></span>
+		<h2>Code Repository</h2>
+	  </div>
+	  <p>The code for processing and analyzing Z-scope and A-scope radar data is available on GitHub:</p>
+	  <ul class="repo-list">
+		<li>
+		  <span class="repo-icon"><i class="fas fa-file-code"></i></span>
+		  <strong>Z_Scope_Processing:</strong>
+		  <span class="dataset-desc">Python code for semi-automatically picking surface and bed features in Z-scope radar film.</span>
+		</li>
+		<li>
+		  <span class="repo-icon"><i class="fas fa-file-code"></i></span>
+		  <strong>A_Scope_Processing:</strong>
+		  <span class="dataset-desc">MATLAB code for semi-automatically picking main bang, surface echo, and bed echo in A-scope film.</span>
+		</li>
+	  </ul>
+	  <a href="https://github.com/GT-PGSL/FrozenLegacies" class="btn btn--primary btn--lg" target="_blank">
+		<i class="fab fa-github"></i> Visit the GitHub Repository
+	  </a>
+	</div>
+
+
+      <!-- Get Involved Card -->
+     <div class="card get-involved-card">
+		  <div class="section-header-with-icon">
+			<span class="section-icon"><i class="fas fa-handshake"></i></span>
+			<h2>Get Involved</h2>
+		  </div>
+		  <p class="get-involved-blurb">
+			Join a growing community of educators and students exploring real polar science. Interested in using this demo in your classroom or research? We’d love to hear from you!
+		  </p>
+		  <a href="mailto:your-email@university.edu" class="btn btn--primary btn--lg" aria-label="Contact us about using this demo">
+			<i class="fas fa-envelope"></i> Contact Us
+		  </a>
+		  <div class="educator-tip">
+			<strong>Tip for Educators:</strong> This demo is perfect for introducing students to real-world data science and polar research. The interactive nature of Jupyter Notebooks allows students to experiment with data and see immediate results, making learning engaging and hands-on.
+		  </div>
+		</div>
+  </section>
+
+    </div>
+  </main>
+ 
+
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-content">
+        <div class="footer-section">
+          <h3>About the Project</h3>
+          <p>Frozen Legacies is a collaborative research initiative funded by the National Science Foundation (NSF) to investigate long-term changes beneath Antarctica’s Ross Ice Shelf using both historical and modern radar data.</p>
+        </div>
+        <div class="footer-section">
+          <h3>Contact</h3>
+          <p>Email: info@frozenlegacies.org<br>
+          Project Leads: Winnie Chu, Angelo Tarzona</p>
+        </div>
+        <div class="footer-section">
+          <img src="image/nsf-logo.png" alt="NSF Logo" style="height:48px;">
+          <p>NSF Award #2049332</p>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <p>&copy; 2025 Frozen Legacies. All rights reserved.</p>
+      </div>
+    </div>
+  </footer>
+</body>
+</html>
+

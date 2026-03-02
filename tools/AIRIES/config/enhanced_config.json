@@ -1,0 +1,58 @@
+{
+    "semi_automatic_params": {
+        "enabled": true,
+        "template_params": {
+            "window_size": [
+                20,
+                10
+            ],
+            "confidence_threshold": 0.7,
+            "max_search_range": 30,
+            "template_update_rate": 0.3,
+            "use_enhanced_search": true
+        },
+        "session_management": {
+            "auto_save_enabled": true,
+            "backup_count": 5,
+            "cleanup_days": 30
+        },
+        "visualization_params": {
+            "figure_size": [
+                16,
+                10
+            ],
+            "dpi": 100,
+            "region_colors": {
+                "surface": "cyan",
+                "bed": "orange",
+                "active": "red",
+                "completed": "green"
+            },
+            "pick_colors": {
+                "manual": "red",
+                "automatic": "yellow",
+                "high_confidence": "lime",
+                "low_confidence": "orange"
+            },
+            "alpha_values": {
+                "region_overlay": 0.3,
+                "pick_points": 0.8,
+                "confidence_overlay": 0.6
+            }
+        }
+    },
+    "enhanced_visualization": {
+        "enabled": true,
+        "realtime_feedback": true,
+        "confidence_visualization": true,
+        "template_analysis": true,
+        "quality_dashboard": true,
+        "export_html_summary": true
+    },
+    "session_persistence": {
+        "enabled": true,
+        "session_directory": "sessions",
+        "auto_resume_last_session": false,
+        "session_timeout_hours": 24
+    }
+}

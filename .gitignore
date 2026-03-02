@@ -1,0 +1,45 @@
+# ── Large data (never upload to GitHub) ──────────────────────
+Data/ascope/raw/          # 12 GB raw TIFF scans
+Zipfiles/                 # Compressed archives
+
+# ── Science-critical files (hold until post-LYRA) ───────────
+Radiometric_Calibrator/
+Attenuation/
+
+# ── Documentation (kept locally, not on GitHub) ─────────────
+docs/
+old_docs/
+
+# ── Retired tools ───────────────────────────────────────────
+CalpipPicker/
+
+# ── Generated outputs (reproducible from code + data) ───────
+**/output/
+**/OUTPUT/
+**/backup/
+**/backup_copies/
+
+# ── Python build artifacts ──────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# ── macOS system files ──────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# ── Claude Code private config ──────────────────────────────
+.claude/
+
+# ── LaTeX auxiliary files ───────────────────────────────────
+*.aux
+*.log
+*.toc
+*.out
+*.synctex.gz
+
+# ── IDE / editor ────────────────────────────────────────────
+.vscode/
+*.code-workspace

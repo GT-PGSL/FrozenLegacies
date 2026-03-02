@@ -1,0 +1,797 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FrozenLegacies — Project Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1" integrity="sha384-jb8JQMbMoBUzgWatfe6COACi2ljcDdZQ2OxczGA3bGNeWe+6DChMTBJemed7ZnvJ" crossorigin="anonymous"></script>
+    <style>
+        :root {
+            --bg: #0f1117;
+            --surface: #1a1d27;
+            --surface2: #232733;
+            --border: #2e3345;
+            --text: #e2e4ea;
+            --text-dim: #8b8fa3;
+            --accent: #4e9af5;
+            --accent-dim: #2a5a9e;
+            --green: #34c77b;
+            --orange: #f5a623;
+            --red: #e84855;
+            --purple: #9b6dff;
+            --cyan: #00d4aa;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.5;
+        }
+        .dashboard {
+            max-width: 1440px;
+            margin: 0 auto;
+            padding: 24px;
+        }
+
+        /* Header */
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 28px;
+            flex-wrap: wrap;
+            gap: 16px;
+        }
+        header h1 {
+            font-size: 24px;
+            font-weight: 600;
+            color: var(--text);
+        }
+        header h1 span { color: var(--accent); }
+        header .subtitle {
+            font-size: 13px;
+            color: var(--text-dim);
+            margin-top: 4px;
+        }
+        .last-updated {
+            font-size: 12px;
+            color: var(--text-dim);
+            background: var(--surface);
+            padding: 6px 14px;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+        }
+
+        /* Tabs */
+        .tabs {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 24px;
+            background: var(--surface);
+            padding: 4px;
+            border-radius: 10px;
+            width: fit-content;
+        }
+        .tab {
+            padding: 8px 20px;
+            border-radius: 7px;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            color: var(--text-dim);
+            transition: all 0.2s;
+            border: none;
+            background: none;
+        }
+        .tab:hover { color: var(--text); }
+        .tab.active {
+            background: var(--accent);
+            color: #fff;
+        }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+
+        /* KPI Cards */
+        .kpis {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 28px;
+        }
+        .kpi {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 20px;
+        }
+        .kpi-label {
+            font-size: 12px;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+        }
+        .kpi-value {
+            font-size: 28px;
+            font-weight: 700;
+        }
+        .kpi-sub {
+            font-size: 12px;
+            color: var(--text-dim);
+            margin-top: 4px;
+        }
+
+        /* Phase Tracker */
+        .phases {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 24px;
+            margin-bottom: 28px;
+        }
+        .phases h2 {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 20px;
+        }
+        .phase-row {
+            display: flex;
+            align-items: center;
+            padding: 14px 0;
+            border-bottom: 1px solid var(--border);
+            gap: 16px;
+        }
+        .phase-row:last-child { border-bottom: none; }
+        .phase-num {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 14px;
+            flex-shrink: 0;
+        }
+        .phase-num.active { background: var(--accent); color: #fff; }
+        .phase-num.pending { background: var(--surface2); color: var(--text-dim); border: 2px solid var(--border); }
+        .phase-num.done { background: var(--green); color: #fff; }
+        .phase-info { flex: 1; }
+        .phase-title { font-weight: 600; font-size: 14px; }
+        .phase-desc { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
+        .phase-status {
+            font-size: 11px;
+            font-weight: 600;
+            padding: 4px 12px;
+            border-radius: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .status-active { background: rgba(78,154,245,0.15); color: var(--accent); }
+        .status-pending { background: rgba(139,143,163,0.15); color: var(--text-dim); }
+        .status-done { background: rgba(52,199,123,0.15); color: var(--green); }
+
+        /* Charts */
+        .chart-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 28px;
+        }
+        .chart-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 20px;
+        }
+        .chart-card.full { grid-column: 1 / -1; }
+        .chart-card h3 {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+        .chart-card .chart-sub {
+            font-size: 12px;
+            color: var(--text-dim);
+            margin-bottom: 16px;
+        }
+        .chart-wrap {
+            position: relative;
+            height: 320px;
+        }
+        .chart-wrap.tall { height: 400px; }
+
+        /* Session Log */
+        .log-section {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 24px;
+            margin-bottom: 28px;
+        }
+        .log-section h2 {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 16px;
+        }
+        .log-entry {
+            padding: 12px 0;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            gap: 16px;
+        }
+        .log-entry:last-child { border-bottom: none; }
+        .log-date {
+            font-size: 12px;
+            color: var(--accent);
+            font-weight: 600;
+            min-width: 90px;
+            flex-shrink: 0;
+        }
+        .log-text {
+            font-size: 13px;
+            color: var(--text);
+        }
+
+        /* Open Questions */
+        .question-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 12px;
+        }
+        .question-card .q-num {
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--orange);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 6px;
+        }
+        .question-card .q-title {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 6px;
+        }
+        .question-card .q-desc {
+            font-size: 13px;
+            color: var(--text-dim);
+        }
+
+        /* Method Comparison Table */
+        .method-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+        .method-table th {
+            text-align: left;
+            padding: 10px 14px;
+            font-weight: 600;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-dim);
+            border-bottom: 2px solid var(--border);
+        }
+        .method-table td {
+            padding: 10px 14px;
+            border-bottom: 1px solid var(--border);
+        }
+        .method-table tr:hover { background: var(--surface2); }
+        .badge {
+            display: inline-block;
+            font-size: 10px;
+            font-weight: 700;
+            padding: 2px 8px;
+            border-radius: 4px;
+            text-transform: uppercase;
+        }
+        .badge-semi { background: rgba(78,154,245,0.15); color: var(--accent); }
+        .badge-auto { background: rgba(155,109,255,0.15); color: var(--purple); }
+        .badge-selected { background: rgba(52,199,123,0.15); color: var(--green); }
+
+        @media (max-width: 900px) {
+            .chart-grid { grid-template-columns: 1fr; }
+            .kpis { grid-template-columns: repeat(2, 1fr); }
+        }
+        @media (max-width: 600px) {
+            .kpis { grid-template-columns: 1fr; }
+            .dashboard { padding: 16px; }
+        }
+    </style>
+</head>
+<body>
+<div class="dashboard">
+
+    <!-- Header -->
+    <header>
+        <div>
+            <h1><span>FrozenLegacies</span> — Bed-Echo Character</h1>
+            <div class="subtitle">SPRI/TUD/NSF 60 MHz Archival Radar · Flight 125 · Ross Ice Shelf &amp; Siple Coast</div>
+        </div>
+        <div class="last-updated" id="lastUpdated">Updated: 13 Feb 2026 (v2 — post-calibration pivot)</div>
+    </header>
+
+    <!-- Tabs -->
+    <div class="tabs">
+        <button class="tab active" data-tab="overview">Overview</button>
+        <button class="tab" data-tab="data">Data &amp; Calibration</button>
+        <button class="tab" data-tab="methods">Methods</button>
+        <button class="tab" data-tab="log">Session Log</button>
+        <button class="tab" data-tab="questions">Open Questions</button>
+    </div>
+
+    <!-- ════════════════════════════════════════════ -->
+    <!-- TAB: Overview                                -->
+    <!-- ════════════════════════════════════════════ -->
+    <div class="tab-content active" id="tab-overview">
+
+        <!-- KPI Cards -->
+        <div class="kpis">
+            <div class="kpi">
+                <div class="kpi-label">A-scope Bed Picks</div>
+                <div class="kpi-value" style="color:var(--green)">637</div>
+                <div class="kpi-sub">CBDs with R₀ data (primary product)</div>
+            </div>
+            <div class="kpi">
+                <div class="kpi-label">Ratio Calibration</div>
+                <div class="kpi-value" style="color:var(--red)">NULL</div>
+                <div class="kpi-sub">R² = 0.003, r = −0.05 — abandoned</div>
+            </div>
+            <div class="kpi">
+                <div class="kpi-label">Z-scope Dynamic Range</div>
+                <div class="kpi-value" style="color:var(--orange)">~7 dB</div>
+                <div class="kpi-sub">vs 37 dB for A-scope (film saturation)</div>
+            </div>
+            <div class="kpi">
+                <div class="kpi-label">Mean Ice Thickness</div>
+                <div class="kpi-value">477 m</div>
+                <div class="kpi-sub">Range: 220–967 m along track</div>
+            </div>
+        </div>
+
+        <!-- Pivot Banner -->
+        <div style="background:rgba(232,72,85,0.1); border:1px solid rgba(232,72,85,0.3); border-radius:10px; padding:16px 20px; margin-bottom:20px;">
+            <div style="font-size:13px; font-weight:700; color:var(--red); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px;">⚠ Approach Pivot — 13 Feb 2026</div>
+            <div style="font-size:13px; color:var(--text-dim); line-height:1.7;">
+                Ratio-based calibration (Z-scope brightness vs A-scope power) produced a <strong style="color:var(--text)">null result</strong> (R² = 0.003, r = −0.05). Single-pixel Z-scope brightness has only ~7 dB dynamic range due to film saturation — no usable proxy for echo power. <strong style="color:var(--text)">New approach: compute absolute R₀ directly from A-scope data</strong> using the full radar equation (Neal 1977). Z-scope retains secondary role for spatial continuity and ice thickness only.
+            </div>
+        </div>
+
+        <!-- Phase Tracker -->
+        <div class="phases">
+            <h2>Implementation Phases (revised)</h2>
+            <div class="phase-row" style="opacity:0.5;">
+                <div class="phase-num" style="background:var(--red); color:#fff; text-decoration:line-through;">—</div>
+                <div class="phase-info">
+                    <div class="phase-title" style="text-decoration:line-through;">Ratio-Based Radiometric Calibration</div>
+                    <div class="phase-desc">Z-scope brightness ratio vs A-scope power difference — null result (R² ≈ 0)</div>
+                </div>
+                <span class="phase-status" style="background:rgba(232,72,85,0.15); color:var(--red);">Abandoned</span>
+            </div>
+            <div class="phase-row">
+                <div class="phase-num active">1</div>
+                <div class="phase-info">
+                    <div class="phase-title">Absolute R₀ from A-scope</div>
+                    <div class="phase-desc">Full radar equation: MDS calibration → absolute P_R → geometric spreading → dielectric loss → R₀ per CBD</div>
+                </div>
+                <span class="phase-status status-active">In Progress</span>
+            </div>
+            <div class="phase-row">
+                <div class="phase-num pending">2</div>
+                <div class="phase-info">
+                    <div class="phase-title">Bed-Echo Character Metrics</div>
+                    <div class="phase-desc">Mean R₀, power variance (specularity), along-track autocorrelation length (roughness) over ~637 CBDs</div>
+                </div>
+                <span class="phase-status status-pending">Pending</span>
+            </div>
+            <div class="phase-row">
+                <div class="phase-num pending">3</div>
+                <div class="phase-info">
+                    <div class="phase-title">Attenuation Correction</div>
+                    <div class="phase-desc">Johari &amp; Charette 60 MHz dielectric, Robin 1D heat equation, depth-integrated two-way loss (prototyped)</div>
+                </div>
+                <span class="phase-status status-pending">Pending</span>
+            </div>
+            <div class="phase-row">
+                <div class="phase-num pending">4</div>
+                <div class="phase-info">
+                    <div class="phase-title">Modern Comparison Framework</div>
+                    <div class="phase-desc">Correlate SPRI bed-echo character with inverted basal drag fields (Morlighem, Joughin)</div>
+                </div>
+                <span class="phase-status status-pending">Pending</span>
+            </div>
+        </div>
+
+        <!-- Overview Charts -->
+        <div class="chart-grid">
+            <div class="chart-card full">
+                <h3>Along-Track Ice Thickness Profile</h3>
+                <div class="chart-sub">Z-scope TERRA picks, Flight 125 (every 5th CBD for clarity)</div>
+                <div class="chart-wrap"><canvas id="iceThicknessChart"></canvas></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ════════════════════════════════════════════ -->
+    <!-- TAB: Data & Calibration                      -->
+    <!-- ════════════════════════════════════════════ -->
+    <div class="tab-content" id="tab-data">
+        <div class="kpis">
+            <div class="kpi">
+                <div class="kpi-label">Z Surface Brightness</div>
+                <div class="kpi-value">56.4</div>
+                <div class="kpi-sub">Mean (range 24–93)</div>
+            </div>
+            <div class="kpi">
+                <div class="kpi-label">Z Bed Brightness</div>
+                <div class="kpi-value">59.5</div>
+                <div class="kpi-sub">Mean (range 29–130)</div>
+            </div>
+            <div class="kpi">
+                <div class="kpi-label">A Surface Power</div>
+                <div class="kpi-value">−12.3 <span style="font-size:14px">dB</span></div>
+                <div class="kpi-sub">Mean (calibrated relative)</div>
+            </div>
+            <div class="kpi">
+                <div class="kpi-label">A Bed Power</div>
+                <div class="kpi-value">−37.4 <span style="font-size:14px">dB</span></div>
+                <div class="kpi-sub">Mean (637 picks with bed)</div>
+            </div>
+        </div>
+
+        <div class="chart-grid">
+            <div class="chart-card">
+                <h3 style="color:var(--red)">Null Result: Z-Ratio vs A-Difference</h3>
+                <div class="chart-sub">R² = 0.003, r = −0.05. Z brightness has ~7 dB range vs 37 dB for A-scope. <strong>No usable signal.</strong></div>
+                <div class="chart-wrap tall"><canvas id="calScatterChart"></canvas></div>
+            </div>
+            <div class="chart-card">
+                <h3>Scatter Colored by Ice Thickness</h3>
+                <div class="chart-sub">No thickness-dependent structure visible — confirms film saturation, not attenuation, dominates</div>
+                <div class="chart-wrap tall"><canvas id="calThicknessChart"></canvas></div>
+            </div>
+            <div class="chart-card full">
+                <h3>Along-Track Z-Scope Brightness</h3>
+                <div class="chart-sub">Surface (blue) and bed (orange) pixel brightness along F125 flight track</div>
+                <div class="chart-wrap"><canvas id="brightnessChart"></canvas></div>
+            </div>
+            <div class="chart-card full">
+                <h3>Along-Track A-Scope Power</h3>
+                <div class="chart-sub">Surface (blue) and bed (orange) calibrated dB along F125 flight track</div>
+                <div class="chart-wrap"><canvas id="powerChart"></canvas></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ════════════════════════════════════════════ -->
+    <!-- TAB: Methods                                 -->
+    <!-- ════════════════════════════════════════════ -->
+    <div class="tab-content" id="tab-methods">
+        <div class="chart-card" style="margin-bottom:20px">
+            <h3>Digitization Tool Comparison (Tarzona et al. 2026)</h3>
+            <div class="chart-sub">Selected tools are highlighted. Semi-automatic pair chosen for calibration development.</div>
+            <table class="method-table">
+                <thead>
+                    <tr>
+                        <th>Tool</th>
+                        <th>Type</th>
+                        <th>Scope</th>
+                        <th>Method</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>TERRA</strong></td>
+                        <td><span class="badge badge-semi">Semi-auto</span></td>
+                        <td>Z-scope</td>
+                        <td>User-guided polygon tracing; best for faint/ambiguous bed returns</td>
+                        <td><span class="badge badge-selected">Selected</span></td>
+                    </tr>
+                    <tr>
+                        <td>ARIES</td>
+                        <td><span class="badge badge-auto">Automatic</span></td>
+                        <td>Z-scope</td>
+                        <td>Slope-based detection, sliding search windows</td>
+                        <td><span style="color:var(--text-dim)">Backup (scale-up)</span></td>
+                    </tr>
+                    <tr>
+                        <td><strong>ASTRA</strong></td>
+                        <td><span class="badge badge-semi">Semi-auto</span></td>
+                        <td>A-scope</td>
+                        <td>Interactive GUI, snap-to-trace, user-guided calibration grid</td>
+                        <td><span class="badge badge-selected">Selected</span></td>
+                    </tr>
+                    <tr>
+                        <td>URSA</td>
+                        <td><span class="badge badge-auto">Automatic</span></td>
+                        <td>A-scope</td>
+                        <td>Automated frame/grid detection; +8 dB systematic offset vs ASTRA</td>
+                        <td><span style="color:var(--text-dim)">Backup (scale-up)</span></td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="chart-card" style="margin-bottom:20px">
+            <h3>Selection Rationale (updated post-pivot)</h3>
+            <div style="font-size:13px; color:var(--text-dim); line-height:1.7; margin-top:12px;">
+                <p style="margin-bottom:12px"><strong style="color:var(--text)">ASTRA is now the primary tool.</strong> With the ratio calibration null, all quantitative power analysis comes from A-scope data alone. ASTRA's user-guided grid calibration directly references the oscilloscope graticule, giving the most reliable absolute dB values. R₀ will be computed per-CBD from ASTRA outputs using the full radar equation.</p>
+                <p style="margin-bottom:12px"><strong style="color:var(--text)">TERRA is secondary (spatial continuity only).</strong> Single-pixel Z-scope brightness cannot serve as a power proxy (~7 dB dynamic range from film saturation). TERRA still provides along-track ice thickness and spatial coverage beyond A-scope's CBD range, but not power information.</p>
+                <p><strong style="color:var(--text)">URSA is excluded for calibration</strong> due to the systematic +8 dB offset in surface power. For the absolute R₀ workflow, this offset would propagate directly into the reflection coefficient.</p>
+            </div>
+        </div>
+
+        <div class="chart-card" style="margin-bottom:20px">
+            <h3>R₀ Workflow (Neal 1977 / GeometricCorrection.pdf)</h3>
+            <div style="font-size:13px; color:var(--text-dim); line-height:1.7; margin-top:12px;">
+                <p style="margin-bottom:8px"><strong style="color:var(--accent)">Step 1 — Geometry:</strong> h_air = (t_surface − t_Tx)/2 × c_air; h_ice = (t_bed − t_surface)/2 × c_ice; h_eff = h_air + h_ice/n_ice</p>
+                <p style="margin-bottom:8px"><strong style="color:var(--accent)">Step 2 — Absolute power:</strong> C = MDS(−101 dBm) − NoiseFloor(−60 dB) = −41 dBm; P_R = bed_dB + C + A_att(40 dB)</p>
+                <p style="margin-bottom:8px"><strong style="color:var(--accent)">Step 3 — Power ratio:</strong> 10 log₁₀(P_R/P_T) = P_R(dBm) − 60 dBm</p>
+                <p style="margin-bottom:8px"><strong style="color:var(--accent)">Step 4 — Dielectric loss:</strong> L_diel = 2∫α(T(z))dz [Johari & Charette 60 MHz]</p>
+                <p><strong style="color:var(--accent)">Step 5 — R₀:</strong> R₀(dB) = 10 log₁₀(P_R/P_T) − 20 log₁₀(λG/8πh_eff) + L_diel &nbsp; [specular: 20 log₁₀, not 40]</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- ════════════════════════════════════════════ -->
+    <!-- TAB: Session Log                             -->
+    <!-- ════════════════════════════════════════════ -->
+    <div class="tab-content" id="tab-log">
+        <div class="log-section">
+            <h2>Session Log</h2>
+            <div class="log-entry">
+                <div class="log-date">13 Feb 2026</div>
+                <div class="log-text">
+                    <strong>Session 2c — PIVOT.</strong> Claude Code ran ratio calibration → <strong style="color:var(--red)">null result</strong> (R² = 0.003, r = −0.05). Z-scope brightness has only ~7 dB dynamic range (film saturation) vs 37 dB in A-scope. Ratio approach abandoned. New path: absolute R₀ from A-scope using full radar equation (MDS, attenuator, geometric spreading, dielectric loss per CBD). CLAUDE.md updated with system parameters (Neal 1977), full R₀ workflow, and calibration status. Geometric correction bug identified: code uses 40 log₁₀ (spherical) instead of 20 log₁₀ (specular), and ignores ice refraction.
+                </div>
+            </div>
+            <div class="log-entry">
+                <div class="log-date">13 Feb 2026</div>
+                <div class="log-text">
+                    <strong>Session 2b.</strong> Verified F125 combined CSVs (748 Z-scope, 776 A-scope rows). Confirmed 423-CBD calibration overlap. Read Tarzona et al. 2026 paper; selected ASTRA+TERRA (semi-automatic) for calibration development. Created CLAUDE.md for Claude Code. Created LaTeX implementation plan (BedEcho_Implementation_Plan.tex). Built project dashboard. Started Claude Code collaboration for Phase 1.
+                </div>
+            </div>
+            <div class="log-entry">
+                <div class="log-date">12 Feb 2026</div>
+                <div class="log-text">
+                    <strong>Session 1.</strong> Explored codebase (Z_Scope_Processing, A_Scope_Processing, Radiometric_Calibrator, Attenuation modules). Analyzed F103 combined picks. Identified that existing calibration.py uses absolute calibration — needs rewrite for ratio-based approach. Created BedEcho_Implementation_Plan.docx with 4 phases. Switched working flight from F103 to F125. Confirmed pixel_depth values are single-pixel brightness.
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ════════════════════════════════════════════ -->
+    <!-- TAB: Open Questions                          -->
+    <!-- ════════════════════════════════════════════ -->
+    <div class="tab-content" id="tab-questions">
+        <div class="question-card" style="border-color:rgba(232,72,85,0.3);">
+            <div class="q-num" style="color:var(--red)">Resolved</div>
+            <div class="q-title" style="text-decoration:line-through; opacity:0.6;">Single-Pixel vs. Windowed Brightness Extraction</div>
+            <div class="q-desc">Moot — the entire Z-scope brightness approach failed. Single-pixel dynamic range (~7 dB) is too compressed by film saturation for any extraction method to recover usable power information.</div>
+        </div>
+        <div class="question-card" style="border-color:rgba(232,72,85,0.3);">
+            <div class="q-num" style="color:var(--red)">Resolved</div>
+            <div class="q-title" style="text-decoration:line-through; opacity:0.6;">Nonlinearity of Z-scope Brightness → Power</div>
+            <div class="q-desc">Moot — no relationship exists at any functional form (linear, log-linear, polynomial all tested). The differentiated display plus film saturation completely destroys the power information.</div>
+        </div>
+        <div class="question-card">
+            <div class="q-num">Question 1 (new)</div>
+            <div class="q-title">Noise Floor Calibration for R₀</div>
+            <div class="q-desc">The ASTRA reference line represents the noise floor at −60 dB on the oscilloscope graticule. Does this correspond exactly to MDS (−101 dBm)? If the noise floor sits above MDS, the calibration constant C shifts. Need to verify against Neal 1977 Table 1.1.</div>
+        </div>
+        <div class="question-card">
+            <div class="q-num">Question 2 (new)</div>
+            <div class="q-title">Geometric Correction: 20 log₁₀ vs 40 log₁₀</div>
+            <div class="q-desc">For specular reflectors (smooth bed), the geometric term uses 20 log₁₀ (P ∝ 1/R²). For rough/diffuse reflectors, 40 log₁₀ may be more appropriate (P ∝ 1/R⁴). The bed condition is unknown a priori — may need to compute both and use the correction as a diagnostic of specularity itself.</div>
+        </div>
+        <div class="question-card">
+            <div class="q-num">Question 3</div>
+            <div class="q-title">A-scope Attenuator Setting Verification</div>
+            <div class="q-desc">The in-flight attenuator A_att = 40 dB is documented for the SPRI system (Neal 1977), but was it constant throughout F125? If the operator adjusted it mid-flight, we need to detect the transition in the data (look for step changes in surface_dB).</div>
+        </div>
+        <div class="question-card">
+            <div class="q-num">Question 4</div>
+            <div class="q-title">Modern Comparison Grid Resolution</div>
+            <div class="q-desc">Inverted basal drag fields are gridded at 1–5 km, while SPRI data has ~300 m CBD spacing. Compare at native resolution (nearest-grid-cell) or smooth SPRI data to match?</div>
+        </div>
+    </div>
+
+</div>
+
+<script>
+// ══════════════════════════════════════════════════
+// DATA (embedded from F125 combined picks)
+// ══════════════════════════════════════════════════
+
+const CAL = [{"cbd":137,"zr":0.98,"ad":-45.28,"h":420.6},{"cbd":138,"zr":1.061,"ad":-35.69,"h":413.2},{"cbd":139,"zr":1.182,"ad":-39.17,"h":383.6},{"cbd":140,"zr":1.0,"ad":-32.9,"h":382.4},{"cbd":141,"zr":1.386,"ad":-31.02,"h":398.4},{"cbd":143,"zr":0.981,"ad":-25.5,"h":387.3},{"cbd":157,"zr":0.828,"ad":-37.35,"h":369.5},{"cbd":158,"zr":0.839,"ad":-21.74,"h":381.9},{"cbd":159,"zr":0.967,"ad":-31.82,"h":394.7},{"cbd":160,"zr":0.904,"ad":-32.76,"h":400.9},{"cbd":161,"zr":1.038,"ad":-36.66,"h":407.1},{"cbd":163,"zr":1.51,"ad":-36.86,"h":409.5},{"cbd":164,"zr":1.23,"ad":-36.56,"h":444.9},{"cbd":165,"zr":1.111,"ad":-28.56,"h":411.5},{"cbd":166,"zr":0.962,"ad":-22.63,"h":426.4},{"cbd":167,"zr":1.019,"ad":-34.64,"h":440.0},{"cbd":170,"zr":0.981,"ad":-17.4,"h":417.7},{"cbd":171,"zr":1.296,"ad":-34.05,"h":409.1},{"cbd":172,"zr":1.061,"ad":-24.5,"h":421.4},{"cbd":173,"zr":0.962,"ad":-15.65,"h":432.5},{"cbd":174,"zr":1.0,"ad":-14.79,"h":430.1},{"cbd":175,"zr":1.085,"ad":-15.6,"h":432.5},{"cbd":176,"zr":1.216,"ad":-15.59,"h":435.0},{"cbd":178,"zr":0.671,"ad":-31.18,"h":465.9},{"cbd":180,"zr":0.982,"ad":-27.71,"h":404.1},{"cbd":181,"zr":0.687,"ad":-27.67,"h":379.4},{"cbd":182,"zr":0.721,"ad":-30.97,"h":374.5},{"cbd":183,"zr":0.929,"ad":-27.58,"h":397.9},{"cbd":184,"zr":1.038,"ad":-30.5,"h":412.8},{"cbd":185,"zr":1.143,"ad":-28.63,"h":390.5},{"cbd":186,"zr":1.065,"ad":-29.4,"h":414.0},{"cbd":187,"zr":0.961,"ad":-28.31,"h":389.3},{"cbd":188,"zr":0.931,"ad":-35.85,"h":426.4},{"cbd":189,"zr":0.806,"ad":-30.79,"h":399.2},{"cbd":190,"zr":1.04,"ad":-29.83,"h":389.3},{"cbd":220,"zr":1.312,"ad":-32.21,"h":358.3},{"cbd":221,"zr":1.061,"ad":-24.6,"h":384.2},{"cbd":222,"zr":0.96,"ad":-24.16,"h":384.2},{"cbd":223,"zr":1.435,"ad":-31.33,"h":355.9},{"cbd":224,"zr":1.093,"ad":-24.95,"h":358.4},{"cbd":225,"zr":0.939,"ad":-15.42,"h":386.8},{"cbd":226,"zr":1.375,"ad":-12.15,"h":410.3},{"cbd":227,"zr":1.235,"ad":-18.68,"h":415.2},{"cbd":228,"zr":1.0,"ad":-23.42,"h":395.5},{"cbd":229,"zr":1.13,"ad":-23.17,"h":410.3},{"cbd":230,"zr":1.391,"ad":-34.05,"h":330.0},{"cbd":232,"zr":0.841,"ad":-32.23,"h":346.0},{"cbd":233,"zr":1.18,"ad":-37.48,"h":331.2},{"cbd":234,"zr":1.269,"ad":-35.12,"h":309.1},{"cbd":235,"zr":1.036,"ad":-25.05,"h":350.9},{"cbd":236,"zr":1.05,"ad":-32.18,"h":326.3},{"cbd":237,"zr":1.222,"ad":-20.43,"h":347.2},{"cbd":238,"zr":1.0,"ad":-22.3,"h":332.5},{"cbd":239,"zr":2.621,"ad":-19.74,"h":334.9},{"cbd":240,"zr":0.865,"ad":-16.95,"h":328.8},{"cbd":241,"zr":0.906,"ad":-11.94,"h":359.5},{"cbd":242,"zr":1.04,"ad":-21.86,"h":339.8},{"cbd":243,"zr":1.34,"ad":-26.97,"h":309.1},{"cbd":246,"zr":1.043,"ad":-31.84,"h":344.2},{"cbd":247,"zr":1.927,"ad":-31.06,"h":312.0},{"cbd":249,"zr":1.481,"ad":-26.52,"h":220.4},{"cbd":250,"zr":1.913,"ad":-17.28,"h":331.8},{"cbd":251,"zr":1.137,"ad":-29.11,"h":354.1},{"cbd":252,"zr":1.522,"ad":-20.75,"h":365.2},{"cbd":253,"zr":1.102,"ad":-10.55,"h":373.9},{"cbd":254,"zr":1.119,"ad":-10.2,"h":365.2},{"cbd":255,"zr":1.043,"ad":-20.7,"h":343.5},{"cbd":256,"zr":0.936,"ad":-26.91,"h":337.4},{"cbd":257,"zr":1.245,"ad":-18.38,"h":346.0},{"cbd":258,"zr":1.319,"ad":-14.47,"h":352.2},{"cbd":259,"zr":0.81,"ad":-15.61,"h":370.2},{"cbd":260,"zr":1.082,"ad":-29.16,"h":335.5},{"cbd":261,"zr":0.962,"ad":-26.88,"h":318.2},{"cbd":262,"zr":1.02,"ad":-28.61,"h":321.9},{"cbd":263,"zr":1.0,"ad":-29.8,"h":326.9},{"cbd":264,"zr":1.098,"ad":-26.83,"h":333.0},{"cbd":265,"zr":1.438,"ad":-20.85,"h":329.3},{"cbd":266,"zr":1.241,"ad":-22.68,"h":312.0},{"cbd":267,"zr":0.727,"ad":-19.07,"h":300.9},{"cbd":268,"zr":1.19,"ad":-24.46,"h":295.9},{"cbd":270,"zr":0.788,"ad":-17.79,"h":294.7},{"cbd":271,"zr":1.014,"ad":-18.93,"h":284.8},{"cbd":272,"zr":1.058,"ad":-25.75,"h":302.1},{"cbd":273,"zr":1.389,"ad":-18.38,"h":320.7},{"cbd":274,"zr":1.122,"ad":-24.01,"h":360.3},{"cbd":275,"zr":0.969,"ad":-24.85,"h":347.9},{"cbd":276,"zr":1.14,"ad":-30.29,"h":335.5},{"cbd":277,"zr":1.176,"ad":-29.1,"h":324.4},{"cbd":278,"zr":1.082,"ad":-29.31,"h":305.8},{"cbd":279,"zr":1.382,"ad":-35.67,"h":263.7},{"cbd":280,"zr":1.333,"ad":-30.38,"h":253.8},{"cbd":281,"zr":1.464,"ad":-26.88,"h":248.9},{"cbd":283,"zr":1.132,"ad":-24.43,"h":300.9},{"cbd":284,"zr":1.041,"ad":-29.37,"h":302.1},{"cbd":285,"zr":0.98,"ad":-24.43,"h":320.7},{"cbd":286,"zr":1.333,"ad":-18.16,"h":252.7},{"cbd":287,"zr":1.178,"ad":-27.53,"h":314.5},{"cbd":288,"zr":1.34,"ad":-18.26,"h":314.5},{"cbd":289,"zr":1.413,"ad":-31.51,"h":312.0},{"cbd":290,"zr":1.08,"ad":-26.31,"h":308.3},{"cbd":291,"zr":1.021,"ad":-26.36,"h":299.6},{"cbd":292,"zr":1.104,"ad":-30.35,"h":308.3},{"cbd":293,"zr":1.51,"ad":-30.1,"h":297.1},{"cbd":294,"zr":1.571,"ad":-27.67,"h":307.0},{"cbd":296,"zr":1.32,"ad":-20.8,"h":303.3},{"cbd":297,"zr":1.562,"ad":-21.4,"h":292.2},{"cbd":298,"zr":1.192,"ad":-22.78,"h":284.8},{"cbd":299,"zr":0.896,"ad":-23.67,"h":297.1},{"cbd":313,"zr":1.676,"ad":-23.77,"h":251.1},{"cbd":314,"zr":0.948,"ad":-16.06,"h":286.8},{"cbd":315,"zr":0.899,"ad":-33.5,"h":287.8},{"cbd":316,"zr":0.88,"ad":-18.58,"h":296.0},{"cbd":317,"zr":1.0,"ad":-22.04,"h":298.0},{"cbd":318,"zr":0.946,"ad":-24.36,"h":315.3},{"cbd":319,"zr":0.686,"ad":-17.64,"h":292.8},{"cbd":350,"zr":0.817,"ad":-15.7,"h":443.1},{"cbd":351,"zr":0.655,"ad":-31.8,"h":386.8},{"cbd":352,"zr":1.203,"ad":-13.75,"h":370.5},{"cbd":356,"zr":1.099,"ad":-25.55,"h":407.3},{"cbd":357,"zr":0.91,"ad":-18.85,"h":418.0},{"cbd":358,"zr":1.039,"ad":-26.6,"h":400.1},{"cbd":359,"zr":1.047,"ad":-23.05,"h":402.5},{"cbd":360,"zr":0.761,"ad":-15.35,"h":409.7},{"cbd":361,"zr":1.387,"ad":-23.05,"h":370.2},{"cbd":384,"zr":0.736,"ad":-24.26,"h":418.0},{"cbd":385,"zr":1.68,"ad":-26.29,"h":416.8},{"cbd":386,"zr":0.925,"ad":-25.3,"h":446.7},{"cbd":387,"zr":1.131,"ad":-24.91,"h":431.2},{"cbd":390,"zr":0.811,"ad":-17.1,"h":424.0},{"cbd":391,"zr":0.976,"ad":-21.89,"h":430.0},{"cbd":392,"zr":1.107,"ad":-23.02,"h":408.5},{"cbd":393,"zr":1.161,"ad":-26.09,"h":427.6},{"cbd":394,"zr":1.141,"ad":-16.66,"h":415.6},{"cbd":420,"zr":1.481,"ad":-22.69,"h":389.3},{"cbd":421,"zr":0.981,"ad":-31.0,"h":382.3},{"cbd":422,"zr":1.22,"ad":-29.96,"h":388.9},{"cbd":423,"zr":0.981,"ad":-28.74,"h":365.5},{"cbd":424,"zr":1.096,"ad":-30.71,"h":380.8},{"cbd":425,"zr":0.864,"ad":-20.63,"h":412.3},{"cbd":426,"zr":1.0,"ad":-29.47,"h":406.2},{"cbd":427,"zr":1.712,"ad":-21.27,"h":417.4},{"cbd":429,"zr":1.27,"ad":-24.17,"h":431.7},{"cbd":431,"zr":1.473,"ad":-33.35,"h":423.5},{"cbd":433,"zr":1.625,"ad":-32.53,"h":427.6},{"cbd":607,"zr":1.039,"ad":-22.41,"h":668.6},{"cbd":608,"zr":1.137,"ad":-19.5,"h":673.5},{"cbd":609,"zr":0.981,"ad":-17.19,"h":690.8},{"cbd":610,"zr":1.0,"ad":-22.46,"h":682.2},{"cbd":611,"zr":1.077,"ad":-14.72,"h":667.4},{"cbd":612,"zr":1.073,"ad":-21.97,"h":664.9},{"cbd":613,"zr":1.131,"ad":-13.89,"h":676.0},{"cbd":614,"zr":1.069,"ad":-25.26,"h":734.0},{"cbd":615,"zr":0.889,"ad":-22.7,"h":701.9},{"cbd":616,"zr":0.947,"ad":-23.45,"h":685.9},{"cbd":617,"zr":1.04,"ad":-21.03,"h":682.2},{"cbd":620,"zr":1.389,"ad":-28.55,"h":666.4},{"cbd":621,"zr":0.981,"ad":-27.3,"h":677.6},{"cbd":622,"zr":0.933,"ad":-30.48,"h":650.2},{"cbd":623,"zr":1.143,"ad":-29.04,"h":652.7},{"cbd":624,"zr":0.932,"ad":-28.84,"h":654.0},{"cbd":625,"zr":1.017,"ad":-31.41,"h":645.3},{"cbd":626,"zr":0.842,"ad":-34.34,"h":627.8},{"cbd":627,"zr":1.14,"ad":-32.3,"h":614.1},{"cbd":628,"zr":0.914,"ad":-28.24,"h":614.1},{"cbd":629,"zr":1.207,"ad":-28.25,"h":596.7},{"cbd":630,"zr":1.6,"ad":-27.3,"h":529.4},{"cbd":631,"zr":1.039,"ad":-25.56,"h":357.5},{"cbd":633,"zr":0.964,"ad":-14.72,"h":371.6},{"cbd":634,"zr":0.892,"ad":-16.65,"h":390.2},{"cbd":635,"zr":1.117,"ad":-18.73,"h":416.3},{"cbd":636,"zr":1.0,"ad":-13.23,"h":432.4},{"cbd":637,"zr":1.062,"ad":-25.37,"h":442.4},{"cbd":638,"zr":1.131,"ad":-20.17,"h":463.5},{"cbd":639,"zr":1.033,"ad":-22.84,"h":489.5},{"cbd":640,"zr":1.017,"ad":-17.49,"h":498.3},{"cbd":641,"zr":0.805,"ad":-27.55,"h":513.2},{"cbd":642,"zr":0.783,"ad":-23.88,"h":529.4},{"cbd":643,"zr":0.771,"ad":-31.26,"h":544.4},{"cbd":644,"zr":0.948,"ad":-25.52,"h":568.0},{"cbd":645,"zr":1.094,"ad":-27.99,"h":602.9},{"cbd":646,"zr":0.581,"ad":-31.76,"h":682.2},{"cbd":647,"zr":1.0,"ad":-31.27,"h":676.0},{"cbd":648,"zr":0.761,"ad":-26.41,"h":656.1},{"cbd":649,"zr":0.885,"ad":-27.35,"h":646.2},{"cbd":650,"zr":0.742,"ad":-37.41,"h":683.5},{"cbd":651,"zr":0.982,"ad":-26.71,"h":702.1},{"cbd":652,"zr":0.95,"ad":-25.52,"h":709.6},{"cbd":653,"zr":0.881,"ad":-33.1,"h":725.7},{"cbd":654,"zr":1.082,"ad":-31.16,"h":712.0},{"cbd":655,"zr":1.0,"ad":-37.31,"h":748.1},{"cbd":656,"zr":0.923,"ad":-34.73,"h":840.0},{"cbd":658,"zr":1.12,"ad":-39.95,"h":827.6},{"cbd":659,"zr":1.387,"ad":-37.38,"h":850.0},{"cbd":660,"zr":1.019,"ad":-39.95,"h":844.4},{"cbd":661,"zr":0.881,"ad":-36.5,"h":861.8},{"cbd":662,"zr":0.848,"ad":-37.42,"h":860.6},{"cbd":663,"zr":0.885,"ad":-41.07,"h":868.1},{"cbd":664,"zr":0.747,"ad":-32.22,"h":895.5},{"cbd":665,"zr":0.838,"ad":-36.36,"h":913.0},{"cbd":666,"zr":1.271,"ad":-35.92,"h":939.2},{"cbd":667,"zr":0.986,"ad":-32.37,"h":966.6},{"cbd":668,"zr":0.869,"ad":-33.73,"h":950.4},{"cbd":669,"zr":0.946,"ad":-34.56,"h":926.7},{"cbd":670,"zr":1.55,"ad":-43.59,"h":918.0},{"cbd":671,"zr":1.185,"ad":-37.41,"h":932.0},{"cbd":672,"zr":1.123,"ad":-39.83,"h":930.7},{"cbd":673,"zr":0.892,"ad":-36.52,"h":878.1},{"cbd":674,"zr":1.062,"ad":-37.56,"h":888.0},{"cbd":675,"zr":1.725,"ad":-37.9,"h":899.3},{"cbd":676,"zr":0.604,"ad":-40.32,"h":910.5},{"cbd":677,"zr":1.353,"ad":-41.16,"h":850.6},{"cbd":678,"zr":1.565,"ad":-42.05,"h":844.4},{"cbd":679,"zr":0.753,"ad":-36.86,"h":858.1},{"cbd":680,"zr":0.855,"ad":-38.1,"h":783.3},{"cbd":681,"zr":1.261,"ad":-33.65,"h":790.7},{"cbd":683,"zr":1.488,"ad":-39.72,"h":780.8},{"cbd":684,"zr":1.529,"ad":-37.87,"h":734.6},{"cbd":685,"zr":1.08,"ad":-24.08,"h":719.7},{"cbd":686,"zr":1.37,"ad":-32.15,"h":714.7},{"cbd":687,"zr":0.562,"ad":-27.14,"h":713.4},{"cbd":688,"zr":1.039,"ad":-29.33,"h":692.2},{"cbd":689,"zr":1.132,"ad":-31.27,"h":652.3},{"cbd":690,"zr":0.81,"ad":-27.48,"h":616.1},{"cbd":691,"zr":1.125,"ad":-26.61,"h":591.2},{"cbd":692,"zr":0.875,"ad":-25.15,"h":572.5},{"cbd":693,"zr":1.077,"ad":-23.06,"h":561.3},{"cbd":694,"zr":1.107,"ad":-28.16,"h":496.4},{"cbd":714,"zr":1.222,"ad":-27.97,"h":730.9},{"cbd":715,"zr":1.088,"ad":-29.7,"h":747.1},{"cbd":716,"zr":1.077,"ad":-23.77,"h":758.3},{"cbd":717,"zr":1.14,"ad":-32.41,"h":739.6},{"cbd":718,"zr":0.791,"ad":-30.04,"h":727.1},{"cbd":719,"zr":1.05,"ad":-30.78,"h":709.7},{"cbd":720,"zr":1.1,"ad":-26.55,"h":715.9},{"cbd":721,"zr":0.809,"ad":-22.37,"h":725.9},{"cbd":722,"zr":0.703,"ad":-22.75,"h":733.4},{"cbd":723,"zr":0.857,"ad":-19.16,"h":730.9},{"cbd":724,"zr":0.871,"ad":-26.74,"h":748.3},{"cbd":725,"zr":1.037,"ad":-26.79,"h":737.1},{"cbd":726,"zr":0.91,"ad":-27.32,"h":722.1},{"cbd":727,"zr":1.091,"ad":-28.94,"h":715.9},{"cbd":728,"zr":0.933,"ad":-31.34,"h":688.2},{"cbd":729,"zr":1.145,"ad":-20.78,"h":683.3},{"cbd":730,"zr":0.949,"ad":-31.49,"h":671.1},{"cbd":731,"zr":0.926,"ad":-27.36,"h":660.1},{"cbd":733,"zr":0.886,"ad":-24.37,"h":655.3},{"cbd":734,"zr":1.098,"ad":-31.76,"h":666.2},{"cbd":736,"zr":0.85,"ad":-29.72,"h":719.7},{"cbd":737,"zr":1.0,"ad":-26.12,"h":739.6},{"cbd":738,"zr":0.877,"ad":-27.43,"h":750.8},{"cbd":739,"zr":0.96,"ad":-24.47,"h":783.3},{"cbd":740,"zr":1.246,"ad":-17.43,"h":794.5},{"cbd":741,"zr":0.907,"ad":-23.45,"h":810.2},{"cbd":742,"zr":1.071,"ad":-19.23,"h":798.0},{"cbd":743,"zr":1.075,"ad":-25.79,"h":774.8},{"cbd":744,"zr":0.98,"ad":-19.57,"h":782.2},{"cbd":746,"zr":0.922,"ad":-30.04,"h":770.0},{"cbd":747,"zr":1.422,"ad":-19.0,"h":767.5},{"cbd":748,"zr":0.875,"ad":-21.39,"h":735.8},{"cbd":749,"zr":0.902,"ad":-17.34,"h":716.3},{"cbd":750,"zr":1.115,"ad":-16.36,"h":701.6},{"cbd":751,"zr":1.623,"ad":-14.8,"h":660.1},{"cbd":752,"zr":1.238,"ad":-12.69,"h":708.9},{"cbd":753,"zr":1.5,"ad":-15.28,"h":704.1},{"cbd":757,"zr":1.078,"ad":-13.72,"h":735.9},{"cbd":760,"zr":0.862,"ad":-12.51,"h":713.8},{"cbd":761,"zr":1.906,"ad":-21.82,"h":712.5},{"cbd":762,"zr":1.088,"ad":-13.04,"h":719.9},{"cbd":763,"zr":0.904,"ad":-15.98,"h":710.1},{"cbd":764,"zr":0.787,"ad":-7.92,"h":706.4},{"cbd":765,"zr":0.964,"ad":-11.2,"h":712.5},{"cbd":766,"zr":0.909,"ad":-16.85,"h":711.3},{"cbd":767,"zr":1.098,"ad":-20.71,"h":719.9},{"cbd":768,"zr":0.895,"ad":-14.92,"h":708.9},{"cbd":769,"zr":1.037,"ad":-20.08,"h":707.7},{"cbd":770,"zr":0.982,"ad":-13.03,"h":694.1},{"cbd":771,"zr":1.0,"ad":-24.57,"h":692.8},{"cbd":772,"zr":1.0,"ad":-16.07,"h":695.3},{"cbd":773,"zr":1.0,"ad":-14.91,"h":694.1},{"cbd":774,"zr":0.934,"ad":-14.23,"h":683.0},{"cbd":775,"zr":0.8,"ad":-22.34,"h":684.2},{"cbd":776,"zr":1.019,"ad":-16.36,"h":702.7},{"cbd":777,"zr":1.075,"ad":-17.53,"h":695.3},{"cbd":778,"zr":0.944,"ad":-13.1,"h":701.4},{"cbd":779,"zr":0.877,"ad":-16.9,"h":683.0},{"cbd":780,"zr":0.963,"ad":-18.99,"h":691.6},{"cbd":835,"zr":1.224,"ad":-40.04,"h":621.7},{"cbd":836,"zr":1.056,"ad":-38.61,"h":594.6},{"cbd":837,"zr":0.963,"ad":-43.72,"h":603.2},{"cbd":838,"zr":1.071,"ad":-42.2,"h":627.8},{"cbd":839,"zr":0.982,"ad":-44.06,"h":612.6},{"cbd":842,"zr":0.945,"ad":-23.28,"h":592.4},{"cbd":843,"zr":1.115,"ad":-24.56,"h":570.9},{"cbd":844,"zr":0.931,"ad":-20.14,"h":589.9},{"cbd":845,"zr":0.964,"ad":-18.96,"h":577.2},{"cbd":847,"zr":1.151,"ad":-18.72,"h":576.0},{"cbd":848,"zr":0.942,"ad":-19.63,"h":557.0},{"cbd":849,"zr":0.923,"ad":-10.51,"h":559.5},{"cbd":850,"zr":1.0,"ad":-11.9,"h":562.1},{"cbd":851,"zr":1.13,"ad":-13.3,"h":559.5},{"cbd":852,"zr":1.0,"ad":-37.82,"h":534.5},{"cbd":853,"zr":0.925,"ad":-16.03,"h":548.2},{"cbd":854,"zr":0.945,"ad":-35.04,"h":534.5},{"cbd":855,"zr":1.058,"ad":-21.69,"h":540.7},{"cbd":856,"zr":0.883,"ad":-38.64,"h":530.7},{"cbd":857,"zr":0.86,"ad":-13.68,"h":530.7},{"cbd":858,"zr":0.926,"ad":-17.28,"h":525.7},{"cbd":861,"zr":0.964,"ad":-17.44,"h":525.7},{"cbd":862,"zr":1.058,"ad":-16.46,"h":503.3},{"cbd":863,"zr":1.038,"ad":-16.06,"h":511.5},{"cbd":866,"zr":1.074,"ad":-22.49,"h":512.0},{"cbd":878,"zr":0.868,"ad":-24.31,"h":462.1},{"cbd":879,"zr":1.058,"ad":-24.8,"h":477.0},{"cbd":880,"zr":1.137,"ad":-19.82,"h":453.3},{"cbd":881,"zr":0.9,"ad":-16.9,"h":442.1},{"cbd":882,"zr":0.962,"ad":-26.34,"h":450.8},{"cbd":883,"zr":1.104,"ad":-24.41,"h":438.3},{"cbd":885,"zr":1.019,"ad":-27.41,"h":432.1},{"cbd":886,"zr":1.163,"ad":-39.59,"h":428.3},{"cbd":887,"zr":0.883,"ad":-29.28,"h":413.4},{"cbd":888,"zr":1.059,"ad":-31.24,"h":412.1},{"cbd":889,"zr":1.093,"ad":-25.89,"h":400.9},{"cbd":890,"zr":1.054,"ad":-37.04,"h":389.6},{"cbd":892,"zr":1.056,"ad":-38.46,"h":418.0},{"cbd":896,"zr":0.952,"ad":-39.94,"h":440.8},{"cbd":897,"zr":0.912,"ad":-40.44,"h":448.3},{"cbd":898,"zr":1.234,"ad":-40.44,"h":433.3},{"cbd":900,"zr":1.0,"ad":-41.37,"h":419.6},{"cbd":901,"zr":0.763,"ad":-42.1,"h":405.9},{"cbd":902,"zr":0.948,"ad":-42.78,"h":402.1},{"cbd":903,"zr":0.881,"ad":-39.28,"h":402.1},{"cbd":904,"zr":0.851,"ad":-41.71,"h":387.1},{"cbd":906,"zr":0.786,"ad":-41.36,"h":388.3},{"cbd":907,"zr":1.06,"ad":-44.08,"h":398.6},{"cbd":908,"zr":0.947,"ad":-43.75,"h":384.4},{"cbd":909,"zr":0.836,"ad":-26.66,"h":380.6},{"cbd":910,"zr":0.963,"ad":-35.51,"h":390.9},{"cbd":911,"zr":0.814,"ad":-34.33,"h":380.6},{"cbd":912,"zr":0.839,"ad":-40.49,"h":397.3},{"cbd":913,"zr":0.909,"ad":-40.05,"h":381.9},{"cbd":914,"zr":0.981,"ad":-40.15,"h":387.0},{"cbd":916,"zr":0.764,"ad":-40.34,"h":381.9},{"cbd":917,"zr":1.046,"ad":-39.31,"h":372.8},{"cbd":919,"zr":0.821,"ad":-34.92,"h":348.8},{"cbd":920,"zr":1.208,"ad":-42.78,"h":381.2},{"cbd":921,"zr":1.191,"ad":-30.41,"h":363.7},{"cbd":922,"zr":0.897,"ad":-38.62,"h":360.0},{"cbd":923,"zr":0.833,"ad":-32.05,"h":350.0},{"cbd":924,"zr":1.0,"ad":-36.78,"h":353.8},{"cbd":925,"zr":1.039,"ad":-44.08,"h":356.3},{"cbd":926,"zr":0.86,"ad":-27.04,"h":340.1},{"cbd":927,"zr":0.948,"ad":-38.48,"h":334.1},{"cbd":928,"zr":0.944,"ad":-37.17,"h":348.3},{"cbd":929,"zr":1.706,"ad":-37.61,"h":327.7},{"cbd":930,"zr":0.912,"ad":-33.07,"h":354.8},{"cbd":931,"zr":0.803,"ad":-33.12,"h":361.2},{"cbd":934,"zr":0.904,"ad":-37.12,"h":343.8},{"cbd":935,"zr":1.036,"ad":-38.15,"h":367.5},{"cbd":936,"zr":1.12,"ad":-31.31,"h":362.5},{"cbd":937,"zr":1.02,"ad":-33.16,"h":371.2},{"cbd":938,"zr":1.067,"ad":-40.15,"h":376.2},{"cbd":939,"zr":0.906,"ad":-39.7,"h":350.0},{"cbd":940,"zr":0.952,"ad":-36.43,"h":383.7},{"cbd":941,"zr":1.204,"ad":-34.82,"h":396.1},{"cbd":942,"zr":1.163,"ad":-35.85,"h":396.1},{"cbd":943,"zr":0.929,"ad":-38.73,"h":374.9},{"cbd":944,"zr":1.745,"ad":-27.54,"h":373.7},{"cbd":988,"zr":1.038,"ad":-17.69,"h":344.3},{"cbd":989,"zr":0.925,"ad":-13.85,"h":341.8},{"cbd":990,"zr":1.089,"ad":-43.33,"h":329.1},{"cbd":991,"zr":0.814,"ad":-33.21,"h":352.5},{"cbd":992,"zr":1.196,"ad":-41.6,"h":353.8},{"cbd":993,"zr":0.961,"ad":-26.82,"h":363.7},{"cbd":994,"zr":0.825,"ad":-39.94,"h":345.1},{"cbd":995,"zr":0.943,"ad":-38.71,"h":330.1},{"cbd":996,"zr":0.807,"ad":-35.22,"h":361.2},{"cbd":997,"zr":1.471,"ad":-41.02,"h":341.3},{"cbd":998,"zr":1.75,"ad":-41.11,"h":338.8},{"cbd":999,"zr":1.571,"ad":-43.23,"h":337.6},{"cbd":1001,"zr":0.877,"ad":-34.9,"h":336.7},{"cbd":1002,"zr":1.02,"ad":-24.53,"h":335.5},{"cbd":1003,"zr":0.768,"ad":-44.02,"h":303.8},{"cbd":1004,"zr":1.281,"ad":-22.13,"h":317.7},{"cbd":1005,"zr":0.981,"ad":-15.8,"h":306.4},{"cbd":1006,"zr":0.833,"ad":-14.54,"h":310.1},{"cbd":1007,"zr":0.807,"ad":-11.76,"h":305.1},{"cbd":1008,"zr":0.962,"ad":-13.58,"h":316.5},{"cbd":1009,"zr":0.981,"ad":-19.2,"h":315.2},{"cbd":1010,"zr":1.104,"ad":-21.55,"h":320.3},{"cbd":1011,"zr":0.98,"ad":-24.09,"h":305.1},{"cbd":1025,"zr":1.132,"ad":-18.44,"h":315.2},{"cbd":1026,"zr":1.035,"ad":-28.73,"h":321.5},{"cbd":1027,"zr":1.0,"ad":-25.44,"h":305.1},{"cbd":1028,"zr":1.24,"ad":-19.36,"h":311.5},{"cbd":1029,"zr":0.981,"ad":-18.59,"h":324.1},{"cbd":1030,"zr":1.019,"ad":-21.29,"h":312.8},{"cbd":1031,"zr":0.833,"ad":-32.73,"h":301.4},{"cbd":1032,"zr":1.07,"ad":-34.76,"h":312.8},{"cbd":1033,"zr":1.2,"ad":-30.56,"h":309.0},{"cbd":1034,"zr":1.17,"ad":-20.47,"h":309.0},{"cbd":1035,"zr":1.63,"ad":-22.4,"h":298.9},{"cbd":1036,"zr":0.843,"ad":-20.27,"h":292.6},{"cbd":1050,"zr":0.981,"ad":-38.16,"h":307.7},{"cbd":1051,"zr":1.055,"ad":-34.08,"h":303.9},{"cbd":1052,"zr":0.982,"ad":-40.69,"h":303.9},{"cbd":1053,"zr":1.135,"ad":-38.06,"h":331.7},{"cbd":1054,"zr":0.912,"ad":-33.84,"h":327.9},{"cbd":1056,"zr":1.074,"ad":-32.72,"h":325.4},{"cbd":1058,"zr":0.946,"ad":-32.72,"h":330.4},{"cbd":1059,"zr":1.714,"ad":-39.04,"h":355.7},{"cbd":1060,"zr":1.0,"ad":-26.9,"h":327.9},{"cbd":1061,"zr":0.862,"ad":-29.27,"h":326.6},{"cbd":1063,"zr":1.073,"ad":-29.06,"h":322.9},{"cbd":1064,"zr":1.06,"ad":-22.94,"h":335.5},{"cbd":1066,"zr":1.071,"ad":-35.48,"h":346.8},{"cbd":1067,"zr":1.0,"ad":-36.45,"h":327.9},{"cbd":1068,"zr":1.519,"ad":-16.31,"h":327.9},{"cbd":1069,"zr":1.056,"ad":-14.58,"h":340.5},{"cbd":1070,"zr":1.077,"ad":-34.76,"h":345.6},{"cbd":1071,"zr":1.078,"ad":-37.03,"h":319.1},{"cbd":1072,"zr":1.5,"ad":-30.41,"h":339.3},{"cbd":1073,"zr":1.491,"ad":-40.5,"h":341.8},{"cbd":1074,"zr":1.536,"ad":-37.56,"h":363.2}];
+
+const ZP = [[1068,52,79,328],[1073,55,82,342],[1078,51,50,342],[1056,54,58,325],[1061,58,50,327],[1066,56,60,347],[1045,54,57,328],[1050,52,51,308],[1032,57,61,313],[1037,64,49,277],[1015,55,47,293],[1020,54,49,286],[1025,53,60,315],[1003,56,43,304],[1008,53,51,316],[1013,55,57,311],[991,59,48,353],[996,57,46,361],[973,53,47,366],[978,54,53,335],[983,51,44,324],[962,55,51,353],[967,52,66,365],[972,48,61,375],[949,52,53,381],[954,51,68,367],[933,53,54,361],[938,45,48,376],[943,56,52,375],[922,58,52,360],[927,58,55,334],[906,56,44,388],[911,59,48,381],[916,55,42,382],[895,62,72,427],[900,54,54,420],[879,52,55,477],[884,55,51,433],[889,54,59,401],[868,50,51,496],[873,51,47,472],[878,53,46,462],[856,60,53,531],[861,56,54,526],[840,58,57,601],[845,55,53,577],[850,54,54,562],[828,49,45,621],[833,51,52,604],[811,59,43,597],[816,52,54,603],[821,57,50,598],[799,51,58,637],[804,51,50,620],[809,50,50,603],[787,53,53,666],[792,57,58,653],[774,61,57,683],[779,57,50,683],[758,46,51,741],[763,52,47,710],[768,57,51,709],[743,53,57,775],[748,72,63,736],[753,24,36,704],[732,53,58,658],[737,62,62,740],[714,63,77,731],[719,60,63,710],[724,62,54,748],[688,51,53,692],[693,52,56,561],[698,68,73,433],[675,40,69,899],[680,62,53,783],[685,50,54,720],[663,61,54,868],[668,61,53,950],[650,66,49,683],[655,58,58,748],[633,55,53,372],[638,61,69,464],[643,83,64,544],[621,52,51,678],[626,57,48,628],[631,51,53,358],[610,51,51,682],[615,63,56,702],[581,74,76,799],[586,60,54,836],[566,76,55,581],[571,87,60,635],[576,59,70,584],[468,56,47,470],[473,62,64,457],[426,55,55,406],[431,55,81,424],[411,62,78,387],[416,56,60,386],[421,53,52,382],[398,50,53,354],[403,52,57,387],[381,70,52,347],[386,67,62,447],[391,85,83,430],[369,68,64,373],[374,54,87,387],[379,52,72,435],[356,71,78,407],[361,62,86,370],[366,51,53,394],[343,51,68,436],[348,56,130,438],[353,82,89,375],[331,61,100,365],[336,83,84,379],[315,79,71,288],[320,74,72,309],[325,79,92,301],[289,46,65,312],[294,49,77,307],[299,48,43,297],[277,51,60,324],[282,61,53,295],[260,49,53,336],[265,48,69,329],[270,66,52,295],[248,43,57,229],[253,49,54,374],[258,47,62,352],[235,56,58,351],[240,52,45,329],[222,50,48,384],[227,51,63,415],[179,49,50,413],[184,52,54,413],[189,62,50,399],[167,54,55,440],[172,49,52,421],[177,54,47,403],[155,55,52,404],[160,52,47,401],[138,49,52,413],[143,54,53,387],[148,70,70,402]];
+
+const AP = [[1316,-12.6,-22],[1321,-17.1,-23.1],[1301,-20.5,-26],[1306,-18.6,-27.4],[1311,-16.3,-25.5],[1292,-19.7,-26.9],[1297,-19.4,-29.7],[1282,-22,-42.7],[1263,-22.8,-44],[1268,-22.8,-31.1],[1253,-24.1,-48],[1258,-21.5,-39.7],[1239,-18.1,-48.7],[1244,-25.5,-47.2],[1225,-19.4,-49.7],[1230,-19.6,-35.9],[1216,-30.9,-50.8],[1221,-22,-32.6],[1207,-27.6,-49.5],[1176,-4,-35.9],[1181,-5.8,-39.9],[1167,-4.5,-40.5],[1172,-1.1,-37.8],[1063,-7.9,-37],[1068,-7.7,-24],[1073,-6.8,-47.3],[1053,-6.7,-44.8],[1058,-5.3,-38.1],[1026,-6.2,-35],[1031,-4.1,-36.8],[1036,-5.5,-25.8],[1004,-4.8,-26.9],[1009,-6.7,-25.9],[990,-2.9,-46.2],[995,-4,-42.7],[934,-5.3,-42.4],[939,-5.4,-45.1],[944,-11.8,-39.3],[924,-5.8,-42.6],[929,-4.8,-42.4],[911,-5.3,-39.6],[916,-4.2,-44.5],[897,-6.7,-47.1],[902,-4.8,-47.5],[907,-4.7,-48.8],[887,-5.1,-34.4],[892,-5.1,-43.6],[882,-5,-31.3],[863,-3.6,-19.7],[848,-5.8,-25.5],[853,-7,-23.1],[858,-6.2,-23.4],[839,-3.8,-47.9],[844,-6.9,-27],[773,-6,-20.9],[778,-7.8,-20.9],[783,-15.4,-24.4],[764,-14.4,-22.3],[769,-6.8,-26.9],[748,-13.9,-35.3],[753,-11.9,-27.1],[733,-13.4,-37.8],[738,-13.7,-41.1],[743,-14.5,-40.3],[723,-15.6,-34.7],[728,-11.2,-42.5],[709,-4.7,-45.2],[714,-14.6,-42.6],[719,-10.7,-41.5],[687,3.2,-23.9],[692,3.3,-21.9],[672,-4.7,-44.5],[677,3.9,-37.3],[658,4.1,-35.9],[663,4.1,-37],[668,-11.1,-44.9],[648,-13,-39.4],[653,-6.1,-39.2],[634,-14,-30.6],[639,-11.6,-34.4],[644,-10.7,-36.2],[624,-13,-41.8],[629,-12.7,-40.9],[609,-13.3,-30.5],[614,-12.6,-37.8],[594,-16.9,-45.5],[599,-15.4,-46.5],[604,-12.8,-38.2],[546,-15.3,-33.6],[551,-15.4,-36.1],[556,-12.6,-20.8],[537,-15.3,-49.4],[542,-14.6,-45.3],[526,-13.3,-45.3],[483,-14.5,-27.2],[488,-14.9,-29.1],[493,-13.7,-30],[434,-14.9,-49.7],[444,-12.8,-32.9],[424,-14.7,-45.4],[429,-11.9,-36.1],[385,-14.6,-40.9],[390,-12.7,-29.8],[350,-15.6,-31.2],[360,-13.4,-28.8],[311,-13.3,-39.8],[316,-15.1,-33.6],[297,-14.1,-35.5],[302,-13.3,-34.2],[307,-15.5,-40.5],[287,-13.4,-41],[292,-12.9,-43.3],[272,-14.1,-39.8],[277,-15.1,-44.2],[257,-13.4,-31.7],[262,-17.2,-45.8],[267,-15.3,-34.4],[253,-13.7,-24.2],[233,-12.4,-49.9],[238,-14.1,-36.4],[243,-14.7,-41.7],[224,-13.3,-38.2],[229,-13,-36.2],[184,-14.3,-44.8],[189,-12.6,-43.4],[170,-11.9,-29.3],[175,-10.8,-26.4],[180,-12.8,-40.5],[160,-14.8,-47.6],[165,-13.2,-41.7],[133,-6.5,-48.4],[138,-5.8,-41.5],[143,-22.3,-47.8]];
+
+// ══════════════════════════════════════════════════
+// CHART DEFAULTS
+// ══════════════════════════════════════════════════
+Chart.defaults.color = '#8b8fa3';
+Chart.defaults.borderColor = '#2e3345';
+Chart.defaults.font.family = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+Chart.defaults.font.size = 11;
+
+// ══════════════════════════════════════════════════
+// TAB SWITCHING
+// ══════════════════════════════════════════════════
+document.querySelectorAll('.tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.tab-content').forEach(tc => tc.classList.remove('active'));
+        tab.classList.add('active');
+        document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+    });
+});
+
+// ══════════════════════════════════════════════════
+// CHART: Ice Thickness Profile
+// ══════════════════════════════════════════════════
+const zpSorted = [...ZP].sort((a, b) => a[0] - b[0]);
+new Chart(document.getElementById('iceThicknessChart'), {
+    type: 'line',
+    data: {
+        labels: zpSorted.map(d => d[0]),
+        datasets: [{
+            label: 'Ice thickness (m)',
+            data: zpSorted.map(d => d[3]),
+            borderColor: '#4e9af5',
+            backgroundColor: 'rgba(78,154,245,0.1)',
+            fill: true,
+            borderWidth: 1.5,
+            pointRadius: 0,
+            tension: 0.3
+        }]
+    },
+    options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+            x: { title: { display: true, text: 'CBD (along-track)' }, ticks: { maxTicksLimit: 20 } },
+            y: { title: { display: true, text: 'Ice thickness (m)' }, reverse: false }
+        }
+    }
+});
+
+// ══════════════════════════════════════════════════
+// CHART: Calibration Scatter (Z-ratio vs A-diff)
+// ══════════════════════════════════════════════════
+new Chart(document.getElementById('calScatterChart'), {
+    type: 'scatter',
+    data: {
+        datasets: [{
+            label: 'Calibration points',
+            data: CAL.map(d => ({ x: d.zr, y: d.ad })),
+            backgroundColor: 'rgba(78,154,245,0.5)',
+            borderColor: 'rgba(78,154,245,0.8)',
+            borderWidth: 1,
+            pointRadius: 3,
+            pointHoverRadius: 5
+        }]
+    },
+    options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+            legend: { display: false },
+            tooltip: {
+                callbacks: {
+                    label: (ctx) => {
+                        const d = CAL[ctx.dataIndex];
+                        return `CBD ${d.cbd}: Rz=${d.zr.toFixed(2)}, ΔP=${d.ad.toFixed(1)} dB, h=${d.h}m`;
+                    }
+                }
+            }
+        },
+        scales: {
+            x: { title: { display: true, text: 'Z-scope brightness ratio (bed/surface)' }, min: 0.4, max: 2.8 },
+            y: { title: { display: true, text: 'A-scope power difference (dB)' } }
+        }
+    }
+});
+
+// ══════════════════════════════════════════════════
+// CHART: Calibration colored by ice thickness
+// ══════════════════════════════════════════════════
+const hMin = Math.min(...CAL.map(d => d.h));
+const hMax = Math.max(...CAL.map(d => d.h));
+function thicknessColor(h) {
+    const t = (h - hMin) / (hMax - hMin);
+    const r = Math.round(50 + 200 * t);
+    const g = Math.round(180 - 100 * t);
+    const b = Math.round(255 - 200 * t);
+    return `rgba(${r},${g},${b},0.6)`;
+}
+new Chart(document.getElementById('calThicknessChart'), {
+    type: 'scatter',
+    data: {
+        datasets: [{
+            label: 'Colored by ice thickness',
+            data: CAL.map(d => ({ x: d.zr, y: d.ad })),
+            backgroundColor: CAL.map(d => thicknessColor(d.h)),
+            borderColor: CAL.map(d => thicknessColor(d.h)),
+            borderWidth: 1,
+            pointRadius: 3.5,
+            pointHoverRadius: 6
+        }]
+    },
+    options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+            legend: { display: false },
+            tooltip: {
+                callbacks: {
+                    label: (ctx) => {
+                        const d = CAL[ctx.dataIndex];
+                        return `CBD ${d.cbd}: h_ice=${d.h}m, Rz=${d.zr.toFixed(2)}, ΔP=${d.ad.toFixed(1)}dB`;
+                    }
+                }
+            }
+        },
+        scales: {
+            x: { title: { display: true, text: 'Z-scope brightness ratio (bed/surface)' }, min: 0.4, max: 2.8 },
+            y: { title: { display: true, text: 'A-scope power difference (dB)' } }
+        }
+    }
+});
+
+// ══════════════════════════════════════════════════
+// CHART: Along-track Z-scope brightness
+// ══════════════════════════════════════════════════
+const zpS2 = [...ZP].sort((a, b) => a[0] - b[0]);
+new Chart(document.getElementById('brightnessChart'), {
+    type: 'line',
+    data: {
+        labels: zpS2.map(d => d[0]),
+        datasets: [
+            { label: 'Surface brightness', data: zpS2.map(d => d[1]), borderColor: '#4e9af5', borderWidth: 1.5, pointRadius: 0, tension: 0.2 },
+            { label: 'Bed brightness', data: zpS2.map(d => d[2]), borderColor: '#f5a623', borderWidth: 1.5, pointRadius: 0, tension: 0.2 }
+        ]
+    },
+    options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'top' } },
+        scales: {
+            x: { title: { display: true, text: 'CBD' }, ticks: { maxTicksLimit: 20 } },
+            y: { title: { display: true, text: 'Pixel brightness (0–255)' } }
+        }
+    }
+});
+
+// ══════════════════════════════════════════════════
+// CHART: Along-track A-scope power
+// ══════════════════════════════════════════════════
+const apS = [...AP].sort((a, b) => a[0] - b[0]);
+new Chart(document.getElementById('powerChart'), {
+    type: 'line',
+    data: {
+        labels: apS.map(d => d[0]),
+        datasets: [
+            { label: 'Surface dB', data: apS.map(d => d[1]), borderColor: '#4e9af5', borderWidth: 1.5, pointRadius: 0, tension: 0.2 },
+            { label: 'Bed dB', data: apS.map(d => d[2]), borderColor: '#f5a623', borderWidth: 1.5, pointRadius: 0, tension: 0.2 }
+        ]
+    },
+    options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'top' } },
+        scales: {
+            x: { title: { display: true, text: 'CBD' }, ticks: { maxTicksLimit: 20 } },
+            y: { title: { display: true, text: 'Calibrated power (dB)' } }
+        }
+    }
+});
+</script>
+</body>
+</html>

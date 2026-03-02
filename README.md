@@ -1,112 +1,90 @@
-<p align="left">
-  <img src="Z_Scope_Processing/docs/logo-echo-explore-combine-wbg.png" alt="Project Logo" height="120">
-  <span style="font-size:2em; vertical-align: middle;"></span>
+<p align="center">
+  <img src="logo/frozenlegacytools_img.png" alt="Frozen Legacies" height="140">
 </p>
 
-# Frozen Legacies: Investigating Decades of Change Beneath Antarctica
+# Frozen Legacies
 
-**Frozen Legacies** brings together newly digitized radar film from historic 1970s Antarctic flights and today's advanced airborne surveys to reveal how the Ross Ice Shelf has changed over nearly 50 years. By peering beneath the ice with radar, our team is uncovering the story of Antarctica's largest ice shelf—helping scientists, educators, and the public understand the frozen frontier's past, present, and future.
+Investigating 50 years of change beneath the Ross Ice Shelf using archival 60 MHz airborne radar from the 1974–75 SPRI/TUD/NSF Antarctic surveys.
 
-## 🚀 Project Overview
+## Overview
 
-This collaborative initiative between **Georgia Tech**, **Stanford University**, and **Colorado School of Mines** addresses critical knowledge gaps in ice shelf evolution by providing the first direct measurements of ice shelf changes over nearly half a century.
+This project derives **bed-echo character** (reflection coefficient R₀, power variance V_p, fading length τ_p) from archival A-scope radar data recorded on 35 mm film during 12 flights over the Ross Ice Shelf and Siple Coast ice streams. The 50-year temporal baseline — comparing 1970s radar with modern NASA Operation IceBridge, CReSIS, and ROSETTA-Ice surveys — provides the first direct measurements of basal change over half a century.
 
-### Key Achievements
+A collaboration between **Georgia Tech**, **Stanford University**, and **Colorado School of Mines**.
 
-- 🎯 **First direct measurements** of basal melt rates beneath the Ross Ice Shelf
-- 📼 **Digitizing and analyzing** 1970s radar data for new discoveries  
-- 🎓 **Engaging students and educators** in real polar research
-- 🤝 **Multi-institutional collaboration** bringing together leading researchers
+## Tools
 
-## 📊 Executive Summary
+### LYRA — Layered-echo Yield from Radiometric Archives
 
-**Frozen Legacies** represents an unprecedented investigation of Antarctica's Ross Ice Shelf, combining newly digitized 1970s radar film with modern airborne surveys to provide the first direct measurements of ice shelf changes over nearly half a century.
+Fully algorithmic A-scope waveform extraction pipeline. Replaces manual digitization (ASTRA) with reproducible, calibrated measurements from raw TIFF scans of oscilloscope film.
 
-By processing, calibrating, and analyzing over **400,000 line-kilometers** of historical radar data, we directly compare subsurface conditions with modern observations from:
-- NASA Operation IceBridge
-- NSF CReSIS
-- ROSETTA-Ice
+| Step | Script | Output |
+|------|--------|--------|
+| 1. Frame detection + CBD assignment | `step1_detect_frames.py` | `frame_index.csv`, contact sheet, OCR diagnostics |
+| 2. Grid calibration | `step2_calibrate.py` | Per-frame calibration CSV + diagnostic figures |
+| 3. Echo extraction | `step3_echoes.py` | Surface/bed TWT, power, SNR, width, h_air, h_ice |
 
-### Why This Matters
+```bash
+# Typical workflow
+python tools/LYRA/step1_detect_frames.py Data/ascope/raw/125/40_0008400_0008424-reel_begin_end.tiff
+python tools/LYRA/pick_calibration.py    Data/ascope/raw/125/40_0008400_0008424-reel_begin_end.tiff
+python tools/LYRA/step2_calibrate.py     Data/ascope/raw/125/40_0008400_0008424-reel_begin_end.tiff
+python tools/LYRA/step3_echoes.py        Data/ascope/raw/125/40_0008400_0008424-reel_begin_end.tiff
+```
 
-The Ross Ice Shelf buttresses glaciers that could raise global sea levels by **11.6 meters** if lost. Understanding its long-term behavior is crucial for:
-- Climate projections and modeling
-- Coastal planning worldwide
-- Antarctic ice sheet stability assessments
+**Validated on**: F125 (60 frames), F127 (38 frames), F141 (12 frames).
 
-## 🛠️ Repository Structure
+### Other Tools
 
-### Core Processing Tools
+| Tool | Purpose |
+|------|---------|
+| **ASTRA** | A-scope manual digitization (retired for geometry; picks used as cross-check) |
+| **AIRIES** | Z-scope echogram processing |
+| **TERRA** | Navigation and track processing |
+| **URSA** | A-scope batch processor |
 
-- **[Z_Scope_Processing/](Z_Scope_Processing/)** - Advanced Python package for processing historical Z-scope radar echograms
-  - Enhanced CBD tick mark detection with local image recognition
-  - Comprehensive 7-column CSV export with coordinate interpolation
-  - Publication-quality visualization tools
-  - Batch processing capabilities for large datasets
+## Data
 
-### Data and Analysis
+- **Navigation**: 61 per-flight CSVs in `Navigation_Files/` (CBD, LAT, LON, THK, SRF; 66,141 records)
+- **ASTRA picks**: 12-flight digitized A-scope picks in `Data/ascope/picks/`
+- **Raw TIFFs**: Not included in this repository (12 GB). Contact the team for access.
 
-- **Historical Radar Data**: Digitized 1970s SPRI-NSF-TUD Campaign radar film
-- **Modern Comparisons**: Integration with contemporary airborne radar surveys
-- **Geospatial Integration**: Full coordinate interpolation using Bingham navigation data
+## Flights
 
-## 🔬 Scientific Impact
+| Flight | Region | Valid CBDs | Status |
+|--------|--------|-----------|--------|
+| F103 | Siple Coast / Ross Ice Shelf | 307 | ASTRA complete |
+| F107 | Ross Ice Shelf NW | 423 | ASTRA complete |
+| F114 | Deep interior (85°S) | 206 | ASTRA complete |
+| F115 | Ross Ice Shelf | 405 | ASTRA complete |
+| F125 | Roosevelt Island / Ross Ice Shelf | 565 | LYRA validated |
+| F126 | Ross Ice Shelf margin | 223 | ASTRA complete |
+| F127 | Ross Ice Shelf central | 570 | LYRA validated |
+| F128 | Ross Ice Shelf | 760 | ASTRA complete |
+| F137 | Ross Ice Shelf NW | 146 | ASTRA complete |
+| F138 | Ross Ice Shelf | 323 | ASTRA complete |
+| F141 | Ross Ice Shelf | 498 | LYRA validated |
+| F143 | Ross Ice Shelf / Siple Coast | 646 | ASTRA complete |
 
-### Research Applications
+## System Parameters
 
-This package enables researchers to:
-- **Analyze ice thickness changes** over 50-year timescales
-- **Map basal melt patterns** beneath the Ross Ice Shelf
-- **Validate climate models** with long-term observational data
-- **Study ice shelf dynamics** and stability mechanisms
+| Parameter | Value | Source |
+|-----------|-------|--------|
+| Frequency | 60 MHz (λ = 5 m) | Neal 1977 |
+| Transmit power | 1 kW (60 dBm) | Neal 1977 Table 1.1 |
+| Pulse width | 125 ns (14 MHz BW) | Neal 1977 Table 1.1 |
+| Antenna gain | 10.7 dB effective | 12 dB − 1 dB cable − 0.3 dB T/R |
+| Attenuator | 40 dB (confirmed F125) | ESM Figs 5.4a/b |
+| MDS | −101 dBm @ 14 MHz | Neal 1977 Table 1.1 |
+| Dynamic range | 70 dB | Schroeder 2021 |
 
-## 📚 Getting Started
+## Key References
 
-### For Researchers
+- Neal, C. S. (1977). *Radio echo studies of the Ross Ice Shelf*. PhD thesis, University of Cambridge.
+- Neal, C. S. (1979). The dynamics of the Ross Ice Shelf revealed by radio echo-sounding. *J. Glaciol.*, 24(90), 295–307.
+- Schroeder, D. M. et al. (2021). Archival radar data and the future of ice sheet research.
+- Millar, D. H. M. (1981). *Radio echo layering in polar ice sheets*. PhD thesis, University of Cambridge.
 
-1. **Explore the Z-Scope Processing tools** in the `Z_Scope_Processing/` directory
-2. **Review the documentation** for processing historical radar data
-3. **Access sample datasets** and processing examples
-4. **Contribute to the codebase** through pull requests and issues
+## License
 
-### For Educators
-
-- Use real polar research data in classroom settings
-- Engage students with hands-on data analysis
-- Explore the intersection of technology and climate science
-- Connect with ongoing Antarctic research efforts
-
-## 🌍 Broader Impact
-
-### Climate Science
-
-Understanding long-term ice shelf behavior is essential for:
-- Improving sea level rise projections
-- Validating ice sheet models
-- Assessing Antarctic contribution to global climate
-
-### Educational Outreach
-
-- Bringing cutting-edge polar research into classrooms
-- Training the next generation of glaciologists
-- Promoting STEM education through real-world applications
-
-## 📖 Documentation and Resources
-
-- **Processing Documentation**: Comprehensive guides for radar data analysis
-- **Scientific Publications**: Peer-reviewed research outputs
-- **Educational Materials**: Resources for classroom and outreach use
-- **Technical Support**: Community-driven development and support
-
-## 🤝 Contributing
-
-We welcome contributions from the scientific community, including:
-- Code improvements and bug fixes
-- Documentation enhancements
-- New analysis tools and methods
-- Educational resources and examples
-
-
-*Frozen Legacies: Preserving and analyzing historical Antarctic radar data to understand ice shelf evolution and inform future climate projections.*
-
-
+Contact the project team for licensing and data access inquiries.
