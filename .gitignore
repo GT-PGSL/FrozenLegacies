@@ -1,5 +1,6 @@
 # ── Large data (never upload to GitHub) ──────────────────────
 Data/ascope/raw/          # 12 GB raw TIFF scans
+Data/zscope/              # Z-scope raw data
 Zipfiles/                 # Compressed archives
 
 # ── Science-critical files (hold until post-LYRA) ───────────
@@ -7,8 +8,8 @@ Radiometric_Calibrator/
 Attenuation/
 
 # ── Documentation (kept locally, not on GitHub) ─────────────
-docs/
-old_docs/
+/docs/
+/old_docs/
 
 # ── Retired tools ───────────────────────────────────────────
 CalpipPicker/
