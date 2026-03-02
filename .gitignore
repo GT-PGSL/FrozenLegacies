@@ -10,6 +10,7 @@ Attenuation/
 # ── Documentation (kept locally, not on GitHub) ─────────────
 /docs/
 /old_docs/
+CLAUDE.md
 
 # ── Retired tools ───────────────────────────────────────────
 CalpipPicker/
