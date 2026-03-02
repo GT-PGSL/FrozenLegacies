@@ -16,7 +16,7 @@ A collaboration between **Georgia Tech**, **Stanford University**, and **Colorad
 
 ### LYRA — Layered-echo Yield from Radiometric Archives
 
-Fully algorithmic A-scope waveform extraction pipeline. Replaces manual digitization (ASTRA) with reproducible, calibrated measurements from raw TIFF scans of oscilloscope film.
+Fully algorithmic A-scope waveform extraction pipeline designed for raw ASCOPE TIFF scans of oscilloscope film.
 
 | Step | Script | Output |
 |------|--------|--------|
@@ -88,3 +88,4 @@ python tools/LYRA/step3_echoes.py        Data/ascope/raw/125/40_0008400_0008424-
 ## License
 
 Contact the project team for licensing and data access inquiries.
+
