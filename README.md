@@ -38,7 +38,7 @@ python tools/LYRA/step3_echoes.py        Data/ascope/raw/125/40_0008400_0008424-
 
 | Tool | Purpose |
 |------|---------|
-| **ASTRA** | A-scope manual digitization (retired for geometry; picks used as cross-check) |
+| **ASTRA** | A-scope manual digitization |
 | **AIRIES** | Z-scope echogram processing |
 | **TERRA** | Navigation and track processing |
 | **URSA** | A-scope batch processor |
@@ -88,4 +88,5 @@ python tools/LYRA/step3_echoes.py        Data/ascope/raw/125/40_0008400_0008424-
 ## License
 
 Contact the project team for licensing and data access inquiries.
+
 
