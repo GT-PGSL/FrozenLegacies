@@ -126,6 +126,58 @@ def tiff_id(tiff_path: Path) -> str:
     return tiff_path.stem[:8]  # fallback
 
 
+def resolve_tiff_arg(arg: str, root: Path) -> Path:
+    """Resolve a TIFF argument to a full path.
+
+    Accepted formats (in order of preference):
+      - ``FLT/TIFF_ID``:  ``125/8700``  (recommended shorthand)
+      - Full or relative path:  ``Data/ascope/raw/125/40_0008700_0008724-...tiff``
+
+    Returns the resolved absolute Path.  Raises SystemExit on no match.
+    """
+    # If it has a file extension → treat as a literal path
+    p = Path(arg)
+    if p.suffix:
+        return root / p if not p.is_absolute() else p
+
+    # FLT/TIFF_ID shorthand: "125/8700" → search in Data/ascope/raw/125/
+    if "/" in arg:
+        parts = arg.strip("/").split("/")
+        if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+            flt_dir = root / "Data/ascope/raw" / parts[0]
+            if not flt_dir.exists():
+                raise SystemExit(
+                    f"ERROR: Flight directory not found: {flt_dir}")
+            padded = parts[1].zfill(7)
+            matches = sorted(flt_dir.glob(f"*_{padded}_*-reel_begin_end.tiff"))
+            if len(matches) == 1:
+                return matches[0]
+            if not matches:
+                raise SystemExit(
+                    f"ERROR: No TIFF matching ID '{parts[1]}' in F{parts[0]}.\n"
+                    f"  Searched: {flt_dir}/")
+            # Multiple matches (unlikely within one flight)
+            raise SystemExit(
+                f"ERROR: Multiple TIFFs match ID '{parts[1]}' in F{parts[0]}.")
+        # Otherwise treat as a regular relative path
+        return root / p if not p.is_absolute() else p
+
+    # If it exists as a relative path from root → use it
+    if (root / p).exists():
+        return root / p
+
+    # Bare numeric ID without flight → reject with helpful message
+    if arg.isdigit():
+        raise SystemExit(
+            f"ERROR: Please use FLT/TIFF_ID format, e.g. 125/{arg}\n"
+            f"  Usage: python tools/LYRA/<script>.py 125/{arg}")
+
+    raise SystemExit(
+        f"ERROR: Cannot resolve TIFF '{arg}'.\n"
+        f"  Usage: python tools/LYRA/<script>.py FLT/TIFF_ID  (e.g. 125/8700)"
+    )
+
+
 # ── Pure-numpy replacements (no scipy dependency) ─────────────────────────────
 
 def _connected_components_1d(mask: np.ndarray) -> list[tuple[int, int]]:
@@ -409,6 +461,7 @@ def detect_frames(img_norm: np.ndarray,
     # a safety upper bound, so the old behaviour is preserved for TIFFs where
     # gap widths are all similar (no dramatic drop).
     gap_info.sort(key=lambda t: -t[0])   # widest first
+    gap_info_all = list(gap_info)  # preserve pre-cut list for validation
     if len(gap_info) > 1:
         best_cut   = len(gap_info)
         best_ratio = 0.0
@@ -418,10 +471,21 @@ def detect_frames(img_norm: np.ndarray,
                 best_ratio = ratio
                 best_cut   = i
         if best_ratio > 0.50 and best_cut >= 3:
-            print(f"  [detect_frames] bimodal gap cut: keeping {best_cut} wide gaps "
-                  f"(drop {best_ratio:.0%} at rank {best_cut}: "
-                  f"{gap_info[best_cut-1][0]}→{gap_info[best_cut][0]} px)")
-            gap_info = gap_info[:best_cut]
+            # Validate: only apply bimodal cut if the discarded gaps are truly
+            # tiny relative to the kept ones.  If the largest discarded gap is
+            # > 20% of the smallest kept gap, both populations are real features
+            # and the bimodal model is wrong (e.g. faint-trace TIFFs where
+            # dim frames are nearly as bright as inter-frame borders).
+            min_kept    = gap_info[best_cut - 1][0]
+            max_discard = gap_info[best_cut][0]
+            if max_discard < 0.20 * min_kept:
+                print(f"  [detect_frames] bimodal gap cut: keeping {best_cut} wide gaps "
+                      f"(drop {best_ratio:.0%} at rank {best_cut}: "
+                      f"{gap_info[best_cut-1][0]}→{gap_info[best_cut][0]} px)")
+                gap_info = gap_info[:best_cut]
+            else:
+                print(f"  [detect_frames] bimodal cut skipped: discarded gaps too large "
+                      f"({max_discard} px ≥ 20% of {min_kept} px)")
 
     max_gaps = expected_frames - 1
     if len(gap_info) > max_gaps:
@@ -443,31 +507,39 @@ def detect_frames(img_norm: np.ndarray,
         if right - left > min_frame_px:
             frames.append((max(0, left), min(W - 1, right)))
 
-    # ── Post-process: split frames wider than 1.5× median ─────────────────────
-    # If a separator was missed (e.g. dim gap at reel start), one entry may span
-    # two physical A-scopes (~2× normal width).  Find the sub-separator by
-    # searching for the brightest column in the middle 30–70% of the oversized
-    # frame, then split there.  Only triggered when a frame is genuinely 1.5×
-    # the median width — does not affect normally detected frames.
+    # ── Post-process: iteratively split oversized frames ──────────────────────
+    # If a separator was missed (e.g. faint-trace frame nearly as bright as the
+    # border), one entry may span 2+ physical A-scopes.  Find the brightest
+    # column in the middle region and split there.  Repeat until all frames are
+    # within 1.5× the median width.
     if len(frames) >= 2:
-        widths = [r - l for l, r in frames]
-        med_w  = float(np.median(widths))
-        new_frames = []
-        for l, r in frames:
-            if (r - l) > 1.5 * med_w:
-                # Search middle 30%–70% for the sub-separator peak
-                sub_l    = l + int(0.30 * (r - l))
-                sub_r    = l + int(0.70 * (r - l))
-                sub_peak = sub_l + int(np.argmax(col_smooth[sub_l:sub_r]))
-                left_end  = max(l,     sub_peak - buffer_px - 1)
-                right_beg = min(W - 1, sub_peak + buffer_px + 1)
-                new_frames.append((l, left_end))
-                new_frames.append((right_beg, r))
-                print(f"  [detect_frames] oversized frame {l}–{r} (w={r-l}) split "
-                      f"at col {sub_peak} → {l}–{left_end} + {right_beg}–{r}")
-            else:
-                new_frames.append((l, r))
-        frames = sorted(new_frames)
+        changed = True
+        while changed:
+            changed = False
+            widths = [r - l for l, r in frames]
+            med_w  = float(np.median(widths))
+            new_frames = []
+            for l, r in frames:
+                if (r - l) > 1.5 * med_w and (r - l) > min_frame_px * 2:
+                    # Search middle 20%–80% for the sub-separator peak
+                    sub_l    = l + int(0.20 * (r - l))
+                    sub_r    = l + int(0.80 * (r - l))
+                    sub_peak = sub_l + int(np.argmax(col_smooth[sub_l:sub_r]))
+                    left_end  = max(l,     sub_peak - buffer_px - 1)
+                    right_beg = min(W - 1, sub_peak + buffer_px + 1)
+                    # Only split if both halves are wide enough
+                    if (left_end - l > min_frame_px
+                            and r - right_beg > min_frame_px):
+                        new_frames.append((l, left_end))
+                        new_frames.append((right_beg, r))
+                        print(f"  [detect_frames] oversized frame {l}–{r} "
+                              f"(w={r-l}) split at col {sub_peak}")
+                        changed = True
+                    else:
+                        new_frames.append((l, r))
+                else:
+                    new_frames.append((l, r))
+            frames = sorted(new_frames)
 
     return frames
 

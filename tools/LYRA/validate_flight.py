@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""LYRA Phase 5 validation: compare ice thickness with BEDMAP1.
+"""LYRA Phase 5 validation: compare ice thickness with ASTRA and BEDMAP1.
 
 Usage:
     python tools/LYRA/validate_flight.py <flight_number>
 
-Reads the Phase 4 echoes CSV for the given flight, joins with Navigation CSVs
-for lat/lon, matches against BEDMAP1 ice thickness data, and generates a
-3-panel along-track validation figure.
+Reads the Phase 4 echoes CSV for the given flight, compares against:
+  - ASTRA manual picks on the same A-scope frames (d = 0; primary validation)
+  - RIGGS ice thickness (independent seismic/radar; Bentley 1984)
+  - BEDMAP1 SPRI (same-source, spatial context only)
 
 Output:
     tools/LYRA/output/F{FLT}/validation/F{FLT}_validation.png
@@ -20,33 +21,60 @@ from pathlib import Path
 
 import geopandas as gpd
 import matplotlib.pyplot as plt
+import matplotlib.patheffects as pe
+from matplotlib.lines import Line2D
+from matplotlib.ticker import FuncFormatter
 import numpy as np
 import pandas as pd
 from pyproj import Transformer
 from scipy.spatial import cKDTree
+
+# Import basemap helpers from plot_flight_tracks
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from plot_flight_tracks import load_basemap_ps, _graticule_line, _meridian_line, _geo_label
 
 # ── Paths (relative to repo root) ────────────────────────────────────────────
 
 REPO = Path(__file__).resolve().parent.parent.parent  # FrozenLegacies/
 NAV_DIR = REPO / "Navigation_Files"
 BEDMAP_SHP = REPO / "Data" / "BEDMAP" / "BedMap1" / "bedmap1_clip.shp"
+RIGGS_XLSX = REPO / "Data" / "RIGGS" / "RIGGS_H_Ice.xlsx"
 OUTPUT_BASE = Path(__file__).resolve().parent / "output"
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-MATCH_RADIUS_M = 20_000  # max distance (m) for BEDMAP1 nearest-neighbour match
+MATCH_RADIUS_M = 20_000  # max distance (m) for nearest-neighbour match
 NAV_MISSING = 9999       # sentinel for missing THK/SRF in Navigation CSVs
+ASTRA_DIR = REPO / "Data" / "ascope" / "picks"
 
+# ASTRA timing correction: ASTRA assumed 3 µs/div but correct is 1.5 µs/div
+C_ICE = 168.0   # m/µs
+C_AIR = 300.0   # m/µs
+
+# BEDMAP1 mission IDs ─────────────────────────────────────────────────────────
+# SPRI_7475 is the same SPRI/NSF/TUD 1974-75 data that LYRA reprocesses
+# (comparison is circular). All other missions are independent.
+SAME_SOURCE_MISSIONS = {"SPRI_7475"}
+
+# ColorBrewer-based palette ────────────────────────────────────────────────────
 STATUS_COLORS = {
-    "good":       "#2ca02c",   # green
-    "weak_bed":   "#ff7f0e",   # orange
-    "no_bed":     "#aaaaaa",   # gray
-    "no_surface": "#d62728",   # red
+    "good":       "#1b9e77",   # teal-green (ColorBrewer Dark2)
+    "weak_bed":   "#d95f02",   # orange
+    "no_bed":     "#bdbdbd",   # gray
+    "no_surface": "#e7298a",   # magenta-pink
+}
+STATUS_LABELS = {
+    "good":       "Good echo",
+    "weak_bed":   "Weak bed (SNR < 5 dB)",
+    "no_bed":     "No bed echo",
+    "no_surface": "No surface echo",
 }
 STATUS_ORDER = ["good", "weak_bed", "no_bed", "no_surface"]
 
-BEDMAP_COLOR = "#2166ac"   # dark blue
-NAV_THK_COLOR = "#999999"  # light gray
+# Reference dataset colors
+RIGGS_SEIS_COLOR  = "#d62728"   # red (seismic — independent, high accuracy)
+RIGGS_RADAR_COLOR = "#ff7f0e"   # orange (RIGGS 35 MHz radar)
+SPRI_COLOR        = "#2166ac"   # blue (same-source, circular)
 
 _TRANSFORM = Transformer.from_crs("EPSG:4326", "EPSG:3031", always_xy=True)
 
@@ -94,7 +122,6 @@ def load_echoes(flt: int) -> pd.DataFrame:
     if not csv_path.exists():
         sys.exit(f"Phase 4 output not found: {csv_path}")
     df = pd.read_csv(csv_path)
-    # Strip whitespace from column names (CSV writer sometimes adds spaces)
     df.columns = df.columns.str.strip()
     return df.sort_values("cbd").reset_index(drop=True)
 
@@ -109,18 +136,87 @@ def load_navigation(flt: int) -> pd.DataFrame:
     return nav
 
 
-def load_bedmap() -> tuple[np.ndarray, np.ndarray]:
-    """Load BEDMAP1 shapefile and return (coords_xy, ice_thickness) arrays.
-
-    coords_xy: (N, 2) array in EPSG:3031
-    ice_thickness: (N,) array in metres
-    """
+def load_bedmap() -> gpd.GeoDataFrame:
+    """Load BEDMAP1 shapefile with full attribution."""
     if not BEDMAP_SHP.exists():
         sys.exit(f"BEDMAP1 shapefile not found: {BEDMAP_SHP}")
-    gdf = gpd.read_file(BEDMAP_SHP)
-    coords = np.column_stack([gdf["PS_x"].values, gdf["PS_y"].values])
-    thk = gdf["Ice_thickn"].values.astype(float)
-    return coords, thk
+    return gpd.read_file(BEDMAP_SHP)
+
+
+def load_astra(flt: int) -> pd.DataFrame | None:
+    """Load ASTRA manual picks for a flight and compute corrected h_ice/h_air.
+
+    ASTRA assumed 3 us/div but the correct calibration is 1.5 us/div,
+    so all travel times must be divided by 2.  Then convert one-way:
+        h_ice = (bed_us - surface_us) / 4 * c_ice
+        h_air = surface_us / 4 * c_air
+    (divide by 4 = /2 for ASTRA error * /2 for two-way -> one-way)
+
+    Returns DataFrame with columns: CBD, h_ice_astra, h_air_astra
+    or None if no ASTRA data exists.
+    """
+    csv_path = ASTRA_DIR / str(flt) / f"{flt}_CombinedASTRAPicks.csv"
+    if not csv_path.exists():
+        return None
+    astra = pd.read_csv(csv_path)
+    astra.columns = astra.columns.str.strip()
+
+    # Need both surface and bed travel times, and a valid CBD
+    has_both = (astra["surface_us"].notna() & astra["bed_us"].notna()
+                & (astra["bed_us"] > 0) & astra["CBD"].notna())
+    astra = astra[has_both].copy()
+    if astra.empty:
+        return None
+
+    # Apply /2 timing correction + one-way conversion (/4 total)
+    astra["h_ice_astra"] = (astra["bed_us"] - astra["surface_us"]) / 4 * C_ICE
+    astra["h_air_astra"] = astra["surface_us"] / 4 * C_AIR
+
+    # Keep only valid ice thicknesses
+    astra = astra[astra["h_ice_astra"] > 0].copy()
+
+    # Ensure CBD is integer to match LYRA's echoes CSV
+    astra["CBD"] = astra["CBD"].astype(int)
+
+    # Average multiple ASTRA picks per CBD (some have >1 A-scope per frame)
+    astra = astra.groupby("CBD")[["h_ice_astra", "h_air_astra"]].mean().reset_index()
+
+    return astra
+
+
+def load_riggs_stations() -> pd.DataFrame | None:
+    """Load RIGGS ice thickness stations (Bentley 1984, Table 5).
+
+    Uses seismic thickness where available (+/-10 m accuracy, Bamber &
+    Bentley 1994), with RIGGS radar (35 MHz) as fallback.  Both are
+    independent of SPRI 60 MHz.
+
+    Returns DataFrame with: Station, h_ice, source, LAT_dd, LON_dd, x_ps, y_ps
+    or None if the XLSX is missing.
+    """
+    if not RIGGS_XLSX.exists():
+        return None
+    df = pd.read_excel(RIGGS_XLSX)
+
+    # Convert NM/NR strings to NaN
+    for col in ["Radar_H_ice_m", "Seismic_H_ice_m"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    # Drop stations without coordinates
+    df = df[df["LAT_dd"].notna() & df["LON_dd"].notna()].copy()
+
+    # Prefer seismic, fall back to radar
+    df["h_ice"] = df["Seismic_H_ice_m"].fillna(df["Radar_H_ice_m"])
+    df["source"] = np.where(df["Seismic_H_ice_m"].notna(), "seismic", "radar")
+    df = df[df["h_ice"].notna()].copy()
+
+    # Project to polar stereographic
+    x_ps, y_ps = _TRANSFORM.transform(df["LON_dd"].values, df["LAT_dd"].values)
+    df["x_ps"] = x_ps
+    df["y_ps"] = y_ps
+
+    return df[["Station", "h_ice", "source", "LAT_dd", "LON_dd",
+               "x_ps", "y_ps"]].reset_index(drop=True)
 
 
 # ── Core logic ────────────────────────────────────────────────────────────────
@@ -128,79 +224,306 @@ def load_bedmap() -> tuple[np.ndarray, np.ndarray]:
 def merge_with_nav(echoes: pd.DataFrame, nav: pd.DataFrame) -> pd.DataFrame:
     """Join echoes with navigation on CBD."""
     merged = echoes.merge(nav, left_on="cbd", right_on="CBD", how="left")
-    # Mark missing nav rows
     merged["has_nav"] = merged["LAT"].notna()
     return merged
 
 
-def match_bedmap(lats: np.ndarray, lons: np.ndarray,
-                 bedmap_xy: np.ndarray, bedmap_thk: np.ndarray,
-                 radius_m: float = MATCH_RADIUS_M
-                 ) -> tuple[np.ndarray, np.ndarray]:
-    """Find nearest BEDMAP1 ice thickness for each (lat, lon) point.
+def match_reference(lats: np.ndarray, lons: np.ndarray,
+                    ref_xy: np.ndarray, ref_thk: np.ndarray,
+                    radius_m: float = MATCH_RADIUS_M
+                    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Find nearest reference ice thickness for each (lat, lon) point.
 
     Returns:
-        bedmap_ice: (N,) array of matched ice thickness (NaN if no match within radius)
-        bedmap_dist: (N,) array of distances in metres
+        ref_ice: (N,) matched ice thickness (NaN if no match within radius)
+        ref_dist: (N,) distances in metres
+        ref_idx: (N,) index into ref arrays (-1 if no match)
     """
-    # Project flight points to EPSG:3031
     x_ps, y_ps = _TRANSFORM.transform(lons, lats)
     flight_xy = np.column_stack([x_ps, y_ps])
 
-    # Build KDTree on BEDMAP1 points
-    tree = cKDTree(bedmap_xy)
+    tree = cKDTree(ref_xy)
     dists, idxs = tree.query(flight_xy)
 
-    # Apply radius filter
-    bedmap_ice = np.where(dists <= radius_m, bedmap_thk[idxs], np.nan)
-    bedmap_dist = dists
+    within = dists <= radius_m
+    ref_ice = np.where(within, ref_thk[idxs], np.nan)
+    ref_idx = np.where(within, idxs, -1)
+    return ref_ice, dists, ref_idx
 
-    return bedmap_ice, bedmap_dist
+
+def _extract_ref_arrays(gdf: gpd.GeoDataFrame
+                        ) -> tuple[np.ndarray, np.ndarray]:
+    """Extract (xy_coords, thickness) arrays from a BEDMAP1 subset."""
+    xy = np.column_stack([gdf["PS_x"].values, gdf["PS_y"].values])
+    thk = gdf["Ice_thickn"].values.astype(float)
+    return xy, thk
+
+
+# ── Inset map helper ─────────────────────────────────────────────────────────
+
+def _draw_inset_map(ax_map, nav, merged, status, riggs_df, spri_gdf, flt):
+    """Draw spatial context map on the given inset axes.
+
+    Uses Natural Earth basemap from plot_flight_tracks, with graticules,
+    geographic labels, flight track, RIGGS stations, and BEDMAP1 SPRI.
+    """
+    # Load basemap
+    land = load_basemap_ps()
+    land.plot(ax=ax_map, color="#e4eef5", edgecolor="#7aadbb",
+              linewidth=0.4, zorder=1)
+
+    # Determine map extent from flight coordinates (with margin).
+    # Expand the shorter dimension so the map fills the panel height
+    # while keeping equal-aspect geographic proportions.
+    has_coords = merged["LAT"].notna() & merged["LON"].notna()
+    if has_coords.any():
+        fx, fy = _TRANSFORM.transform(
+            merged.loc[has_coords, "LON"].values,
+            merged.loc[has_coords, "LAT"].values)
+        margin = 150_000  # 150 km buffer
+        x_lim = (fx.min() - margin, fx.max() + margin)
+        y_lim = (fy.min() - margin, fy.max() + margin)
+    else:
+        x_lim = (-700_000, 500_000)
+        y_lim = (-1_400_000, -400_000)
+
+    # Get the panel's physical aspect ratio from the figure geometry
+    fig = ax_map.get_figure()
+    bbox = ax_map.get_position()
+    panel_w = bbox.width * fig.get_figwidth()
+    panel_h = bbox.height * fig.get_figheight()
+    panel_aspect = panel_h / panel_w  # physical H/W
+
+    x_range = x_lim[1] - x_lim[0]
+    y_range = y_lim[1] - y_lim[0]
+    data_aspect = y_range / x_range
+
+    if data_aspect < panel_aspect:
+        # Map is wider than tall — expand y to fill height
+        needed_y = x_range * panel_aspect
+        y_mid = (y_lim[0] + y_lim[1]) / 2
+        y_lim = (y_mid - needed_y / 2, y_mid + needed_y / 2)
+    else:
+        # Map is taller than wide — expand x to fill width
+        needed_x = y_range / panel_aspect
+        x_mid = (x_lim[0] + x_lim[1]) / 2
+        x_lim = (x_mid - needed_x / 2, x_mid + needed_x / 2)
+
+    ax_map.set_xlim(*x_lim)
+    ax_map.set_ylim(*y_lim)
+
+    # Graticules (sparse for inset)
+    lon_arr = np.linspace(-180, 180, 721)
+    lat_arr = np.linspace(-90, -60, 200)
+    for lat in [-85, -80, -75]:
+        lx, ly = _graticule_line(lon_arr, lat)
+        ax_map.plot(lx, ly, color="#cccccc", linewidth=0.3,
+                    zorder=0, linestyle="--")
+    for lon in range(-180, 181, 30):
+        lx, ly = _meridian_line(lat_arr, lon)
+        ax_map.plot(lx, ly, color="#cccccc", linewidth=0.3,
+                    zorder=0, linestyle=":")
+
+    # Full flight track from navigation
+    if nav is not None:
+        nav_valid = nav[nav["LAT"].notna() & nav["LON"].notna()]
+        if len(nav_valid) > 0:
+            tx, ty = _TRANSFORM.transform(nav_valid["LON"].values,
+                                          nav_valid["LAT"].values)
+            ax_map.plot(tx, ty, color="#555555", linewidth=0.8,
+                        alpha=0.5, zorder=2, label=f"F{flt} track")
+
+    # LYRA frames (colored by status)
+    if has_coords.any():
+        fst = status[has_coords]
+        for st in STATUS_ORDER:
+            sm = fst == st
+            if sm.any():
+                ax_map.scatter(fx[sm], fy[sm], s=6, c=STATUS_COLORS[st],
+                               edgecolors="white", linewidths=0.15, zorder=4)
+
+    # BEDMAP1 SPRI points (same-source, spatial context)
+    if spri_gdf is not None and len(spri_gdf) > 0:
+        ax_map.scatter(spri_gdf["PS_x"].values, spri_gdf["PS_y"].values,
+                       s=2, facecolors="none", edgecolors=SPRI_COLOR,
+                       linewidths=0.2, marker="D", alpha=0.2, zorder=1.5,
+                       label="BEDMAP1 SPRI")
+
+    # RIGGS stations — seismic vs radar
+    if riggs_df is not None and len(riggs_df) > 0:
+        seis = riggs_df[riggs_df["source"] == "seismic"]
+        radar = riggs_df[riggs_df["source"] == "radar"]
+        if len(seis) > 0:
+            ax_map.scatter(seis["x_ps"].values, seis["y_ps"].values,
+                           s=12, facecolors="none",
+                           edgecolors=RIGGS_SEIS_COLOR,
+                           linewidths=0.6, marker="s", zorder=6,
+                           label="RIGGS seismic")
+        if len(radar) > 0:
+            ax_map.scatter(radar["x_ps"].values, radar["y_ps"].values,
+                           s=10, facecolors="none",
+                           edgecolors=RIGGS_RADAR_COLOR,
+                           linewidths=0.5, marker="s", zorder=5.5,
+                           label="RIGGS radar")
+
+    # Geographic labels (only those visible in extent)
+    for lon, lat, text, fs in [
+        (-155, -79.5, "Ross Ice\nShelf", 6),
+        (-130, -80.5, "Siple Coast", 5.5),
+        (170, -78.5, "Ross Sea", 5.5),
+    ]:
+        gx, gy = _TRANSFORM.transform(np.array([lon]), np.array([lat]))
+        if x_lim[0] < gx[0] < x_lim[1] and y_lim[0] < gy[0] < y_lim[1]:
+            ax_map.text(gx[0], gy[0], text, fontsize=fs, color="#557799",
+                        ha="center", va="center", fontstyle="italic",
+                        zorder=7,
+                        path_effects=[pe.withStroke(linewidth=1.5,
+                                                    foreground="white")])
+
+    # Scale bar
+    sb_len = 100_000  # 100 km
+    sb_x0 = x_lim[0] + 0.06 * (x_lim[1] - x_lim[0])
+    sb_y0 = y_lim[0] + 0.06 * (y_lim[1] - y_lim[0])
+    ax_map.plot([sb_x0, sb_x0 + sb_len], [sb_y0, sb_y0],
+                color="k", linewidth=1.2, solid_capstyle="butt", zorder=8)
+    for xv in [sb_x0, sb_x0 + sb_len]:
+        ax_map.plot([xv, xv], [sb_y0 - 8_000, sb_y0 + 8_000],
+                    color="k", linewidth=0.8, zorder=8)
+    ax_map.text(sb_x0 + sb_len / 2, sb_y0 + 15_000, "100 km",
+                fontsize=4.5, ha="center", va="bottom")
+
+    # Axes formatting
+    ax_map.set_aspect("equal")
+    ax_map.legend(loc="upper left", fontsize=6, markerscale=0.8,
+                  handletextpad=0.3, borderpad=0.4,
+                  framealpha=0.85, edgecolor="#cccccc")
+
+    # Tick labels in km, matching left panel font sizes
+    def _m2km(x, _pos=None):
+        return f"{x / 1e3:.0f}"
+    ax_map.xaxis.set_major_formatter(FuncFormatter(_m2km))
+    ax_map.yaxis.set_major_formatter(FuncFormatter(_m2km))
+    ax_map.xaxis.set_major_locator(plt.MultipleLocator(300_000))
+    ax_map.yaxis.set_major_locator(plt.MultipleLocator(200_000))
+    ax_map.tick_params(labelsize=7, direction="in", pad=2)
+    ax_map.set_xlabel("PS easting (km)", fontsize=8)
+    ax_map.set_ylabel("PS northing (km)", fontsize=8)
+
+    # Enable all spines for the map inset
+    for spine in ax_map.spines.values():
+        spine.set_visible(True)
+        spine.set_linewidth(0.6)
 
 
 # ── Figure generation ─────────────────────────────────────────────────────────
 
-def make_validation_figure(merged: pd.DataFrame, flt: int, out_path: Path):
-    """Generate 3-panel along-track validation figure."""
+def make_validation_figure(merged: pd.DataFrame, flt: int, out_path: Path,
+                           nav: pd.DataFrame | None = None,
+                           riggs_df: pd.DataFrame | None = None,
+                           spri_gdf: gpd.GeoDataFrame | None = None):
+    """Generate along-track validation figure with inset map.
+
+    Main panel: Along-track ice thickness (LYRA vs RIGGS and BEDMAP1 SPRI).
+    Inset: Spatial map with flight track, RIGGS stations, BEDMAP1 SPRI.
+    """
 
     _setup_rcparams()
 
     cbd = merged["cbd"].values
     status = merged["echo_status"].values
     h_ice = merged["h_ice_m"].values
-    h_air = merged["h_air_m"].values
-    bed_snr = merged["bed_snr_dB"].values if "bed_snr_dB" in merged.columns else None
 
     # Count statistics
-    n_total = len(merged)
-    n_good = int((status == "good").sum())
-    n_weak = int((status == "weak_bed").sum())
-    n_nobed = int((status == "no_bed").sum())
-    n_nosurf = int((status == "no_surface").sum())
+    counts = {st: int((status == st).sum()) for st in STATUS_ORDER}
 
-    fig, axes = plt.subplots(3, 1, figsize=(14, 8), sharex=True,
-                             gridspec_kw={"hspace": 0.12})
-    ax_thk, ax_alt, ax_snr = axes
+    # ── Layout: along-track panel + side map ─────────────────────────────
 
-    # ── Panel (a): Ice Thickness ──────────────────────────────────────────
+    fig = plt.figure(figsize=(12, 4.5))
+    gs = fig.add_gridspec(1, 2, width_ratios=[1.8, 1], wspace=0.30,
+                          left=0.06, right=0.97, top=0.88, bottom=0.12)
+    ax_thk = fig.add_subplot(gs[0, 0])
 
-    # BEDMAP1 reference (plot first, behind LYRA dots)
-    if "bedmap_ice" in merged.columns:
-        bm_mask = merged["bedmap_ice"].notna()
-        if bm_mask.any():
-            ax_thk.scatter(cbd[bm_mask], merged["bedmap_ice"].values[bm_mask],
-                           s=12, c=BEDMAP_COLOR, marker="D", alpha=0.5,
-                           zorder=2, label="BEDMAP1")
+    # ── Main panel: Along-track ice thickness ─────────────────────────────
 
-    # Navigation THK reference
-    if "THK" in merged.columns:
-        nav_mask = merged["THK"].notna() & (merged["THK"] != NAV_MISSING)
-        if nav_mask.any():
-            ax_thk.plot(cbd[nav_mask], merged["THK"].values[nav_mask],
-                        color=NAV_THK_COLOR, linewidth=1.0, alpha=0.7,
-                        zorder=1, label="Nav CSV")
+    # RIGGS (independent) — seismic vs radar distinction
+    has_riggs = "riggs_ice" in merged.columns
+    if has_riggs:
+        rm = merged["riggs_ice"].notna()
+        if rm.any():
+            # Split by source type
+            has_source = "riggs_source" in merged.columns
+            if has_source:
+                rm_seis = rm & (merged["riggs_source"] == "seismic")
+                rm_radar = rm & (merged["riggs_source"] == "radar")
+            else:
+                rm_seis = rm
+                rm_radar = pd.Series(False, index=merged.index)
 
-    # LYRA h_ice (plot on top, by status)
+            # Seismic RIGGS
+            if rm_seis.any():
+                n_seis_pts = int(rm_seis.sum())
+                if "riggs_stn_idx" in merged.columns:
+                    n_seis_stns = int(merged.loc[rm_seis, "riggs_stn_idx"].nunique())
+                else:
+                    n_seis_stns = n_seis_pts
+                md_seis = merged.loc[rm_seis, "riggs_dist"].median()
+                ax_thk.scatter(cbd[rm_seis], merged["riggs_ice"].values[rm_seis],
+                               s=30, facecolors="none",
+                               edgecolors=RIGGS_SEIS_COLOR,
+                               linewidths=0.9, marker="s", alpha=0.8, zorder=2,
+                               label=f"RIGGS seismic ($n_{{\\mathrm{{stn}}}}$="
+                                     f"{n_seis_stns}, "
+                                     f"$\\tilde{{d}}$={md_seis/1000:.0f} km)")
+
+            # Radar RIGGS
+            if rm_radar.any():
+                n_radar_pts = int(rm_radar.sum())
+                if "riggs_stn_idx" in merged.columns:
+                    n_radar_stns = int(merged.loc[rm_radar, "riggs_stn_idx"].nunique())
+                else:
+                    n_radar_stns = n_radar_pts
+                md_radar = merged.loc[rm_radar, "riggs_dist"].median()
+                ax_thk.scatter(cbd[rm_radar],
+                               merged["riggs_ice"].values[rm_radar],
+                               s=25, facecolors="none",
+                               edgecolors=RIGGS_RADAR_COLOR,
+                               linewidths=0.8, marker="s", alpha=0.8, zorder=2,
+                               label=f"RIGGS radar ($n_{{\\mathrm{{stn}}}}$="
+                                     f"{n_radar_stns}, "
+                                     f"$\\tilde{{d}}$={md_radar/1000:.0f} km)")
+
+            # Station name annotations (one per unique station)
+            if ("riggs_stn_name" in merged.columns
+                    and "riggs_stn_idx" in merged.columns):
+                labeled = set()
+                for _, row in merged[rm].iterrows():
+                    stn_idx = row.get("riggs_stn_idx", -1)
+                    stn_name = row.get("riggs_stn_name", "")
+                    src = row.get("riggs_source", "seismic")
+                    clr = (RIGGS_SEIS_COLOR if src == "seismic"
+                           else RIGGS_RADAR_COLOR)
+                    if stn_idx >= 0 and stn_idx not in labeled and stn_name:
+                        ax_thk.annotate(stn_name,
+                                        (row["cbd"], row["riggs_ice"]),
+                                        textcoords="offset points",
+                                        xytext=(4, 4), fontsize=5.5,
+                                        color=clr, alpha=0.8)
+                        labeled.add(stn_idx)
+
+    # BEDMAP1 SPRI (same-source, spatial context only)
+    has_spri = "spri_ice" in merged.columns
+    if has_spri:
+        sm = merged["spri_ice"].notna()
+        if sm.any():
+            n_spri = int(sm.sum())
+            md_spri = merged.loc[sm, "spri_dist"].median()
+            ax_thk.scatter(cbd[sm], merged["spri_ice"].values[sm],
+                           s=18, facecolors="none", edgecolors=SPRI_COLOR,
+                           linewidths=0.7, marker="D", alpha=0.5, zorder=1.5,
+                           label=f"BEDMAP1 SPRI ($n$={n_spri}, "
+                                 f"$\\tilde{{d}}$={md_spri/1000:.0f} km)")
+
+    # LYRA h_ice by status
     for st in STATUS_ORDER:
         mask = status == st
         if not mask.any():
@@ -209,84 +532,42 @@ def make_validation_figure(merged: pd.DataFrame, flt: int, out_path: Path):
         valid = np.isfinite(vals)
         if valid.any():
             ax_thk.scatter(cbd[mask][valid], vals[valid],
-                           s=20, c=STATUS_COLORS[st], edgecolors="k",
-                           linewidths=0.3, zorder=3, label=f"LYRA ({st})")
+                           s=18, c=STATUS_COLORS[st],
+                           edgecolors="white", linewidths=0.3, zorder=3)
 
-    ax_thk.set_ylabel("Ice thickness (m)")
-    ax_thk.legend(loc="upper right", ncol=2, markerscale=1.2)
-    _panel_label(ax_thk, "(a)")
-
-    # ── Panel (b): Aircraft Altitude ──────────────────────────────────────
-
-    for st in STATUS_ORDER:
+    # No-detection rug marks
+    for st, ypos in [("no_bed", 0.02), ("no_surface", 0.06)]:
         mask = status == st
         if not mask.any():
             continue
-        vals = h_air[mask]
-        valid = np.isfinite(vals)
-        if valid.any():
-            ax_alt.scatter(cbd[mask][valid], vals[valid],
-                           s=15, c=STATUS_COLORS[st], edgecolors="k",
-                           linewidths=0.3, zorder=3)
+        for c in cbd[mask]:
+            ax_thk.axvline(c, ymin=0, ymax=ypos, color=STATUS_COLORS[st],
+                           linewidth=0.6, alpha=0.6)
+        ax_thk.plot([], [], color=STATUS_COLORS[st], linewidth=1.5,
+                    label=f"{STATUS_LABELS[st]} ({counts[st]})")
 
-    ax_alt.set_ylabel("h_air (m)")
-    _panel_label(ax_alt, "(b)")
+    ax_thk.set_ylabel("Ice thickness (m)")
+    ax_thk.set_xlabel("CBD number")
+    ax_thk.legend(loc="upper right", markerscale=1.2, handletextpad=0.4,
+                  fontsize=6.5)
 
-    # ── Panel (c): Bed SNR ────────────────────────────────────────────────
+    # ── Title ─────────────────────────────────────────────────────────────
 
-    if bed_snr is not None:
-        # Weak-bed threshold line
-        ax_snr.axhline(5.0, color="#d62728", linewidth=0.8, linestyle="--",
-                       alpha=0.6, zorder=1, label="weak_bed threshold (5 dB)")
+    subtitle_parts = []
+    for st in STATUS_ORDER:
+        if counts[st] > 0:
+            subtitle_parts.append(f"{counts[st]} {STATUS_LABELS[st].lower()}")
+    # Center title and subtitle over the along-track panel
+    panel_center = (ax_thk.get_position().x0 + ax_thk.get_position().x1) / 2
+    fig.suptitle(f"F{flt} \u2014 Along-track validation",
+                 fontsize=10, fontweight="bold", y=0.99, x=panel_center)
+    fig.text(panel_center, 0.935, " | ".join(subtitle_parts),
+             ha="center", fontsize=7, color="#666666")
 
-        for st in STATUS_ORDER:
-            mask = status == st
-            if not mask.any():
-                continue
-            vals = bed_snr[mask]
-            valid = np.isfinite(vals)
-            if not valid.any():
-                continue
+    # ── Map panel ─────────────────────────────────────────────────────────
 
-            # Check for artifact flag
-            edge_colors = np.full(valid.sum(), "k", dtype=object)
-            if "bed_envelope_suspect" in merged.columns:
-                suspect = merged["bed_envelope_suspect"].values[mask][valid]
-                edge_colors[suspect == True] = "#d62728"  # noqa: E712
-
-            ax_snr.scatter(cbd[mask][valid], vals[valid],
-                           s=15, c=STATUS_COLORS[st], edgecolors=edge_colors,
-                           linewidths=np.where(edge_colors == "#d62728", 1.2, 0.3),
-                           zorder=3)
-
-        ax_snr.legend(loc="upper right", fontsize=6.5)
-
-    ax_snr.set_ylabel("Bed SNR (dB)")
-    ax_snr.set_xlabel("CBD number")
-    _panel_label(ax_snr, "(c)")
-
-    # ── Title and summary ─────────────────────────────────────────────────
-
-    summary = f"F{flt} \u2014 LYRA Phase 5 Validation"
-    summary += f"  [{n_good} good"
-    if n_weak:
-        summary += f", {n_weak} weak"
-    summary += f", {n_nobed} no_bed"
-    if n_nosurf:
-        summary += f", {n_nosurf} no_surface"
-    summary += f" / {n_total} total]"
-    fig.suptitle(summary, fontsize=10, fontweight="bold", y=0.995)
-
-    # BEDMAP match summary in bottom-right
-    if "bedmap_ice" in merged.columns:
-        n_matched = int(merged["bedmap_ice"].notna().sum())
-        if n_matched > 0:
-            median_dist = merged.loc[merged["bedmap_ice"].notna(),
-                                     "bedmap_dist"].median()
-            ax_snr.text(0.99, 0.02,
-                        f"BEDMAP1: {n_matched} matches (median {median_dist/1000:.1f} km)",
-                        transform=ax_snr.transAxes, fontsize=6.5,
-                        ha="right", va="bottom", color=BEDMAP_COLOR)
+    ax_map = fig.add_subplot(gs[0, 1])
+    _draw_inset_map(ax_map, nav, merged, status, riggs_df, spri_gdf, flt)
 
     # Save
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -302,7 +583,8 @@ def main():
         description="LYRA Phase 5 validation with BEDMAP1 comparison")
     parser.add_argument("flight", type=int, help="Flight number (e.g. 126)")
     parser.add_argument("--radius", type=float, default=MATCH_RADIUS_M,
-                        help=f"BEDMAP1 match radius in metres (default {MATCH_RADIUS_M})")
+                        help=f"BEDMAP1 match radius in metres "
+                             f"(default {MATCH_RADIUS_M})")
     args = parser.parse_args()
 
     flt = args.flight
@@ -322,44 +604,157 @@ def main():
     n_with_nav = int(merged["has_nav"].sum())
     print(f"    {n_with_nav}/{len(merged)} frames matched to coordinates")
 
-    # BEDMAP1 matching
-    print("  Loading BEDMAP1 ...")
-    bedmap_xy, bedmap_thk = load_bedmap()
-    print(f"    {len(bedmap_thk)} points loaded")
+    # Load ASTRA picks (primary validation -- same frames, d = 0)
+    print("  Loading ASTRA picks ...")
+    astra = load_astra(flt)
+    if astra is not None:
+        n_before = len(merged)
+        merged = merged.merge(astra, left_on="cbd", right_on="CBD",
+                              how="left", suffixes=("", "_astra_dup"))
+        for c in merged.columns:
+            if c.endswith("_astra_dup"):
+                merged.drop(columns=c, inplace=True)
+        n_astra = int(merged["h_ice_astra"].notna().sum())
+        print(f"    {n_astra}/{n_before} frames matched to ASTRA picks")
+    else:
+        print("    No ASTRA picks found for this flight")
 
-    # Match only frames with valid coordinates
+    # Load RIGGS stations (independent seismic/radar, Bentley 1984)
+    print("  Loading RIGGS stations ...")
+    riggs_df = load_riggs_stations()
     has_coords = merged["has_nav"] & merged["LAT"].notna() & merged["LON"].notna()
-    merged["bedmap_ice"] = np.nan
-    merged["bedmap_dist"] = np.nan
+    for col in ("riggs_ice", "riggs_dist", "riggs_stn_idx", "riggs_stn_name",
+                "riggs_source", "spri_ice", "spri_dist"):
+        merged[col] = np.nan if col not in ("riggs_stn_name", "riggs_source") else ""
 
-    if has_coords.any():
+    if riggs_df is not None and has_coords.any():
         lats = merged.loc[has_coords, "LAT"].values
         lons = merged.loc[has_coords, "LON"].values
-        bm_ice, bm_dist = match_bedmap(lats, lons, bedmap_xy, bedmap_thk,
-                                       radius_m=args.radius)
-        merged.loc[has_coords, "bedmap_ice"] = bm_ice
-        merged.loc[has_coords, "bedmap_dist"] = bm_dist
+        r_xy = riggs_df[["x_ps", "y_ps"]].values
+        r_thk = riggs_df["h_ice"].values
+        r_ice, r_dist, r_idx = match_reference(lats, lons, r_xy, r_thk,
+                                                radius_m=args.radius)
+        merged.loc[has_coords, "riggs_ice"] = r_ice
+        merged.loc[has_coords, "riggs_dist"] = r_dist
+        merged.loc[has_coords, "riggs_stn_idx"] = r_idx.astype(float)
 
-        n_matched = int(np.isfinite(bm_ice).sum())
-        print(f"    {n_matched} BEDMAP1 matches within {args.radius/1000:.0f} km")
+        # Map station names and sources
+        stn_names = np.where(r_idx >= 0,
+                             riggs_df["Station"].values[np.clip(r_idx, 0, None)],
+                             "")
+        stn_sources = np.where(r_idx >= 0,
+                               riggs_df["source"].values[np.clip(r_idx, 0, None)],
+                               "")
+        merged.loc[has_coords, "riggs_stn_name"] = stn_names
+        merged.loc[has_coords, "riggs_source"] = stn_sources
+
+        n_riggs = int(np.isfinite(r_ice).sum())
+        unique_stns = set(r_idx[r_idx >= 0])
+        n_riggs_stns = len(unique_stns)
+        n_seis = sum(1 for i in unique_stns
+                     if riggs_df.iloc[i]["source"] == "seismic")
+        print(f"    {len(riggs_df)} stations loaded "
+              f"({riggs_df['source'].eq('seismic').sum()} seismic, "
+              f"{riggs_df['source'].eq('radar').sum()} radar)")
+        print(f"    Matches within {args.radius/1000:.0f} km: "
+              f"{n_riggs} points \u2192 {n_riggs_stns} stations "
+              f"({n_seis} seismic, {n_riggs_stns - n_seis} radar)")
+        for idx in sorted(unique_stns):
+            stn = riggs_df.iloc[idx]
+            pts_mask = r_idx == idx
+            md = np.median(r_dist[pts_mask]) / 1000
+            print(f"      {stn['Station']:6s}  {stn['h_ice']:.0f} m "
+                  f"({stn['source']})  d\u0303={md:.1f} km")
+    elif riggs_df is None:
+        print("    RIGGS_H_Ice.xlsx not found")
     else:
-        print("    No coordinates available for BEDMAP matching")
+        print("    No coordinates available for RIGGS matching")
+
+    # Load BEDMAP1 SPRI (same-source, for spatial context only)
+    print("  Loading BEDMAP1 SPRI ...")
+    spri_gdf_map = None
+    if BEDMAP_SHP.exists() and has_coords.any():
+        bedmap_gdf = load_bedmap()
+        spri_gdf = bedmap_gdf[bedmap_gdf["MISSION_ID"].isin(SAME_SOURCE_MISSIONS)]
+        if len(spri_gdf) > 0:
+            lats = merged.loc[has_coords, "LAT"].values
+            lons = merged.loc[has_coords, "LON"].values
+            s_xy, s_thk = _extract_ref_arrays(spri_gdf)
+            s_ice, s_dist, _ = match_reference(lats, lons, s_xy, s_thk,
+                                               radius_m=args.radius)
+            merged.loc[has_coords, "spri_ice"] = s_ice
+            merged.loc[has_coords, "spri_dist"] = s_dist
+            n_spri = int(np.isfinite(s_ice).sum())
+            print(f"    BEDMAP1 SPRI matches within "
+                  f"{args.radius/1000:.0f} km: {n_spri}")
+
+            # Clip SPRI to region near flight for inset map
+            flt_x, flt_y = _TRANSFORM.transform(lons, lats)
+            margin = 150_000  # 150 km buffer
+            spri_gdf_map = spri_gdf[
+                (spri_gdf["PS_x"] >= flt_x.min() - margin)
+                & (spri_gdf["PS_x"] <= flt_x.max() + margin)
+                & (spri_gdf["PS_y"] >= flt_y.min() - margin)
+                & (spri_gdf["PS_y"] <= flt_y.max() + margin)
+            ]
+            print(f"    {len(spri_gdf_map)} BEDMAP1 SPRI points in map region")
+        else:
+            print("    No SPRI entries in BEDMAP1")
+    else:
+        print("    BEDMAP1 shapefile not found or no coordinates")
+
+    # Clip RIGGS to map region
+    riggs_df_map = None
+    if riggs_df is not None and has_coords.any():
+        lats = merged.loc[has_coords, "LAT"].values
+        lons = merged.loc[has_coords, "LON"].values
+        flt_x, flt_y = _TRANSFORM.transform(lons, lats)
+        margin = 150_000
+        riggs_df_map = riggs_df[
+            (riggs_df["x_ps"] >= flt_x.min() - margin)
+            & (riggs_df["x_ps"] <= flt_x.max() + margin)
+            & (riggs_df["y_ps"] >= flt_y.min() - margin)
+            & (riggs_df["y_ps"] <= flt_y.max() + margin)
+        ]
+        print(f"    {len(riggs_df_map)} RIGGS stations in map region")
 
     # Generate figure
     out_path = OUTPUT_BASE / f"F{flt}" / "validation" / f"F{flt}_validation.png"
     print("  Generating validation figure ...")
-    make_validation_figure(merged, flt, out_path)
+    make_validation_figure(merged, flt, out_path,
+                           nav=nav, riggs_df=riggs_df_map,
+                           spri_gdf=spri_gdf_map)
 
     # Summary statistics
     good = merged[merged["echo_status"] == "good"]
-    if len(good) > 0 and "bedmap_ice" in merged.columns:
-        both = good[good["bedmap_ice"].notna() & good["h_ice_m"].notna()]
-        if len(both) > 0:
-            diff = both["h_ice_m"].values - both["bedmap_ice"].values
-            print(f"\n  Ice thickness comparison (LYRA vs BEDMAP1, n={len(both)} good frames):")
-            print(f"    Mean difference: {np.mean(diff):+.0f} m")
-            print(f"    Std difference:  {np.std(diff):.0f} m")
-            print(f"    Median abs diff: {np.median(np.abs(diff)):.0f} m")
+
+    # ASTRA comparison (primary validation)
+    if "h_ice_astra" in merged.columns:
+        both_astra = good[good["h_ice_astra"].notna() & good["h_ice_m"].notna()]
+        if len(both_astra) > 0:
+            diff = both_astra["h_ice_m"].values - both_astra["h_ice_astra"].values
+            print(f"\n  LYRA vs ASTRA (n={len(both_astra)} good frames, d=0):")
+            print(f"    Mean difference: {np.mean(diff):+.1f} m")
+            print(f"    Std difference:  {np.std(diff):.1f} m")
+            print(f"    RMSE:            {np.sqrt(np.mean(diff**2)):.1f} m")
+            print(f"    Median abs diff: {np.median(np.abs(diff)):.1f} m")
+            if len(both_astra) >= 3:
+                r = np.corrcoef(both_astra["h_ice_astra"].values,
+                                both_astra["h_ice_m"].values)[0, 1]
+                print(f"    Correlation r:   {r:.3f}")
+
+    # Spatial comparisons
+    for ref_col, ref_name in [("riggs_ice", "RIGGS (Bentley 1984)"),
+                               ("spri_ice", "BEDMAP1 SPRI (same-source)")]:
+        if ref_col in merged.columns:
+            both = good[good[ref_col].notna() & good["h_ice_m"].notna()]
+            if len(both) > 0:
+                diff = both["h_ice_m"].values - both[ref_col].values
+                print(f"\n  LYRA vs {ref_name} (n={len(both)} good frames):")
+                print(f"    Mean difference: {np.mean(diff):+.0f} m")
+                print(f"    Std difference:  {np.std(diff):.0f} m")
+                print(f"    RMSE:            {np.sqrt(np.mean(diff**2)):.0f} m")
+                print(f"    Median abs diff: {np.median(np.abs(diff)):.0f} m")
 
     print("\nDone.")
 

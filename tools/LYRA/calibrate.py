@@ -68,14 +68,12 @@ sys.path.insert(0, str(ROOT / "tools/LYRA"))
 from lyra import (
     DEFAULT_CAL, detect_frames, extract_trace,
     detect_mb, detect_frame_calibration, px_to_db,
-    _gauss_smooth, ensure_canonical_name, tiff_id,
+    _gauss_smooth, ensure_canonical_name, resolve_tiff_arg, tiff_id,
 )
 
 # ── Resolve TIFF path ──────────────────────────────────────────────────────────
 if len(sys.argv) > 1:
-    TIFF = Path(sys.argv[1])
-    if not TIFF.is_absolute():
-        TIFF = ROOT / TIFF
+    TIFF = resolve_tiff_arg(sys.argv[1], ROOT)
 else:
     TIFF = ROOT / "Data/ascope/raw/125/40_0008400_0008424-reel_begin_end.tiff"
 

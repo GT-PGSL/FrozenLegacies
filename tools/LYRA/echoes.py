@@ -69,7 +69,7 @@ from lyra import (
     detect_echoes, compute_echo_metrics,
     px_to_db, px_to_us,
     C_AIR_M_PER_US, C_ICE_M_PER_US,
-    ensure_canonical_name, tiff_id,
+    ensure_canonical_name, resolve_tiff_arg, tiff_id,
 )
 
 # ── Scientific constants ───────────────────────────────────────────────────────
@@ -78,9 +78,7 @@ WEAK_BED_SNR_DB = 5.0    # bed SNR threshold below which status = "weak_bed"
 
 # ── Resolve TIFF path ──────────────────────────────────────────────────────────
 if len(sys.argv) > 1:
-    TIFF = Path(sys.argv[1])
-    if not TIFF.is_absolute():
-        TIFF = ROOT / TIFF
+    TIFF = resolve_tiff_arg(sys.argv[1], ROOT)
 else:
     TIFF = ROOT / "Data/ascope/raw/125/40_0008400_0008424-reel_begin_end.tiff"
 

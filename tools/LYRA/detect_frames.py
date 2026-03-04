@@ -52,7 +52,7 @@ from PIL import Image
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools/LYRA"))
 
-from lyra import detect_frames, ensure_canonical_name, tiff_id
+from lyra import detect_frames, ensure_canonical_name, resolve_tiff_arg, tiff_id
 from build_digit_templates import (
     recognize_frame, apply_sequential_constraint,
     get_binary_text, find_digit_col_ranges, adjust_blobs_to_7,
@@ -91,9 +91,7 @@ if _args.override:
         FRAME_OVERRIDES[fr_idx] = f"{cbd_val:04d}"
 
 if _args.tiff:
-    TIFF = Path(_args.tiff)
-    if not TIFF.is_absolute():
-        TIFF = ROOT / TIFF
+    TIFF = resolve_tiff_arg(_args.tiff, ROOT)
 else:
     TIFF = ROOT / "Data/ascope/raw/125/40_0008400_0008424-reel_begin_end.tiff"
 
@@ -123,17 +121,24 @@ if OCR_METHOD == "manual":
     # Read human-verified CBDs from ASTRA combined picks CSV.
     # ASTRA 'filename' column uses stems without .tiff extension.
     ASTRA_CSV = ROOT / f"Data/ascope/picks/{FLT}/{FLT}_CombinedASTRAPicks.csv"
-    if not ASTRA_CSV.exists():
-        sys.exit(f"ERROR: ASTRA CSV not found at {ASTRA_CSV}\n"
-                 f"No manual picks available for flight F{FLT}.")
-    _astra_df = pd.read_csv(ASTRA_CSV)
     _tiff_stem = TIFF.stem  # e.g. "40_0008400_0008424-reel_begin_end"
-    _tiff_rows = _astra_df[_astra_df["filename"] == _tiff_stem]
-    if len(_tiff_rows) == 0:
-        sys.exit(f"ERROR: TIFF '{_tiff_stem}' not found in {ASTRA_CSV.name}\n"
-                 f"This TIFF has no manual ASTRA picks. "
-                 f"Use --method segment (OCR) or --cbd-start N instead.")
-    astra_cbds = [int(x) for x in _tiff_rows["CBD"].dropna().tolist()]
+    _astra_ok = False
+    if ASTRA_CSV.exists():
+        _astra_df = pd.read_csv(ASTRA_CSV)
+        _tiff_rows = _astra_df[_astra_df["filename"] == _tiff_stem]
+        if len(_tiff_rows) > 0:
+            astra_cbds = [int(x) for x in _tiff_rows["CBD"].dropna().tolist()]
+            _astra_ok = True
+    if not _astra_ok:
+        if FRAME_OVERRIDES or CBD_START_OVERRIDE is not None:
+            # User provided overrides — fall back to segment OCR for non-overridden frames
+            print(f"  [info] No ASTRA picks for this TIFF; falling back to segment OCR "
+                  f"(overrides will still apply)")
+            OCR_METHOD = "segment"
+            from segment_ocr import recognize_frame_structural, SEGMENT_THRESHOLD
+        else:
+            sys.exit(f"ERROR: TIFF '{_tiff_stem}' has no ASTRA picks.\n"
+                     f"Use --method segment, --override FR:CBD, or --cbd-start N instead.")
 
 elif OCR_METHOD == "ncc":
     if not TMPL_PATH.exists():
