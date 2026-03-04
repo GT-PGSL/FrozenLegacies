@@ -1,6 +1,6 @@
 # ASCOPE_REFERENCE.md — A-scope Physics, Calibration & LYRA Pipeline
 
-Reference document for the LYRA (Layered-echo Yield from Radiometric Archives) pipeline. Covers the physical basis of 60 MHz A-scope radar data from the 1974--75 SPRI/TUD/NSF Antarctic surveys, the calibration constants used in LYRA, and the algorithms behind each processing step.
+Reference document for the LYRA (Layered-echo Yield from Radiometric Archives) pipeline. Covers the physical basis of 60 MHz A-scope radar data from the 1974--75 SPRI/TUD/NSF Antarctic surveys, the calibration constants used in LYRA, and the algorithms behind each processing phase.
 
 All values validated against Neal 1977 Fig 1.3a (CBD 0465, F125).
 
@@ -86,7 +86,7 @@ Y_DISP_HI  = 1700            # bottom of usable CRT display region (px)
 
 ### 3.3 Per-Flight Calibration Variations
 
-The DEFAULT_CAL values above are tuned to F125. Other flights have slightly different oscilloscope settings, producing different pixel spacings, MB positions, and noise-floor reference rows. LYRA Step 2 measures these per-frame from user guide picks and graticule detection.
+The DEFAULT_CAL values above are tuned to F125. Other flights have slightly different oscilloscope settings, producing different pixel spacings, MB positions, and noise-floor reference rows. LYRA Phase 3 measures these per-frame from user guide picks and graticule detection.
 
 | Flight | db_per_px | y_spacing (px) | x_spacing (px) | D_anchor (px) | y_ref (px) | MB position (px) |
 |--------|-----------|----------------|-----------------|----------------|------------|-------------------|
@@ -177,26 +177,31 @@ Frame 8 of F125 TIFF `40_0008400_0008424`, validated against Neal 1977 Fig 1.3a.
 
 ## 7. LYRA Pipeline Overview
 
-LYRA processes raw TIFF scans in three steps. Each step reads the outputs of the previous step.
+LYRA processes raw TIFF scans in five phases. Each phase reads the outputs of the previous phase. The recommended way to run the full pipeline is with `run_flight.py`, which orchestrates all five phases for an entire flight (see Section 12).
 
 ```
-Step 1: Frame detection + CBD assignment
+Phase 1: Frame detection + CBD assignment          (detect_frames.py)
     Input:  raw TIFF
     Output: frame_index.csv (frame boundaries, CBD numbers)
 
-    pick_calibration.py (interactive): user clicks MB, ref, x-grid, y-grid
-    Output: cal_picks.json (guide picks for Step 2)
+Phase 2: Interactive calibration picks              (pick_calibration.py)
+    Input:  TIFF + frame_index.csv
+    Output: cal_picks.json (MB, ref, x-grid guide clicks)
 
-Step 2: Per-frame grid calibration
+Phase 3: Per-frame grid calibration                 (calibrate.py)
     Input:  TIFF + frame_index.csv + cal_picks.json
     Output: cal.csv (mb_x, y_ref_px, db_per_px, us_per_px per frame)
 
-Step 3: Echo extraction + waveform metrics
+Phase 4: Echo extraction + waveform metrics         (echoes.py)
     Input:  TIFF + cal.csv
     Output: echoes.csv + per-frame diagnostic figures
+
+Phase 5: Validation                                 (validate_flight.py)
+    Input:  echoes.csv + BEDMAP1 reference
+    Output: flight summary + BEDMAP1 comparison figure
 ```
 
-### 7.1 Step 1: Frame Detection + CBD Assignment
+### 7.1 Phase 1: Frame Detection + CBD Assignment
 
 **Frame detection** (`detect_frames()` in lyra.py):
 1. Compute column-mean brightness across the full TIFF; normalize to [0, 1]
@@ -216,9 +221,9 @@ After raw OCR, `apply_sequential_constraint()` enforces monotonic CBD ordering a
 
 **CBD numbering note**: TIFF filenames contain **reel positions** (e.g. `47_0004850_0004874`), not CBD numbers. The CBD-to-reel mapping is flight-specific and sometimes non-monotonic.
 
-### 7.2 Interactive Guide Picks (`pick_calibration.py`)
+### 7.2 Phase 2: Interactive Guide Picks (`pick_calibration.py`)
 
-Before Step 2, the user provides guide clicks on a few frames to anchor the calibration:
+Before Phase 3, the user provides guide clicks on a few frames to anchor the calibration:
 
 | Key | Pick type | Purpose |
 |-----|-----------|---------|
@@ -234,9 +239,9 @@ Picks from one frame propagate to other frames in the same TIFF:
 
 Frames can be excluded by adding `"exclude": true` to the JSON (tilted graticule, CRT window shift, faint/missing trace, reel-begin artifact).
 
-### 7.3 Step 2: Per-Frame Grid Calibration
+### 7.3 Phase 3: Per-Frame Grid Calibration (`calibrate.py`)
 
-For each frame, Step 2 determines:
+For each frame, Phase 3 determines:
 
 1. **Main bang position** (`detect_mb()` — 4-tier algorithm):
    - Tier 1 (Guided): narrow window around guide_x; threshold crossing 20 dB above baseline; collect **all** local minima >= 15 dB below baseline, then pick the one **closest to guide_x** (not the first found left-to-right). This prevents left-of-guide artifacts — e.g. the PRF timing pulse at ~490 px — from being mis-identified as the main bang when the real MB is at ~800 px.
@@ -257,15 +262,15 @@ For each frame, Step 2 determines:
 
 Output: `F{FLT}_cal.csv` with per-frame columns `mb_x`, `y_ref_px`, `db_per_px`, `us_per_px`, `mb_power_dB`, and detection metadata.
 
-### 7.4 Step 3: Echo Extraction + Waveform Metrics
+### 7.4 Phase 4: Echo Extraction + Waveform Metrics (`echoes.py`)
 
-Step 3 reads the per-frame calibration from Step 2, extracts the CRT trace from the image, and detects surface and bed echoes.
+Phase 4 reads the per-frame calibration from Phase 3, extracts the CRT trace from the image, and detects surface and bed echoes.
 
 **Trace extraction** (`extract_trace(robust=True)` in lyra.py):
 
 The CRT echo trace is the dark line on the film. For each column, LYRA finds the darkest pixel (argmin) within the display band.
 
-Robust mode (default for Step 3) prevents film-grain noise from corrupting the trace:
+Robust mode (default for Phase 4) prevents film-grain noise from corrupting the trace:
 1. Raw argmin per column
 2. Pre-filter: replace columns in [0, mb_x + skip] and near frame edges with noise floor value
 3. Coarse Gaussian smooth (sigma=30) on pre-filtered trace → stable "expected position" per column
@@ -363,6 +368,16 @@ The last two columns are the artifact flag:
 - `bed_envelope_suspect`: boolean — True if film artifacts may have contaminated the bed echo envelope shape metrics
 - `artifact_max_dB`: float — maximum discrepancy (dB) between pre- and post-median-filter trace within the bed envelope. 0.0 if no artifact detected.
 
+### 7.5 Phase 5: Validation (`validate_flight.py`)
+
+Phase 5 compares LYRA-derived ice thicknesses against BEDMAP1 reference data along the flight track. It produces a flight summary and a comparison figure showing the spatial distribution of differences.
+
+This phase is run automatically at the end of `run_flight.py`, or standalone:
+
+```bash
+python tools/LYRA/validate_flight.py 125
+```
+
 ---
 
 ## 8. Geometric Spreading and the Radar Equation
@@ -433,7 +448,7 @@ Typical absorption rate for cold Antarctic ice at 60 MHz: ~1--3 dB per 100 m (de
 
 ### 8.3 Worked Example: CBD 0465 (F125)
 
-From LYRA Step 3:
+From LYRA Phase 4:
 ```
 bed_power_dB  = -24.1 dB   (read from A-scope)
 h_air         = 853 m       (from surface TWT = 5.69 us)
@@ -579,7 +594,35 @@ Some frames cannot be reliably calibrated. Record in `F{FLT}_cal_picks.json` wit
 
 ## 12. Running the Pipeline
 
-### 12.1 Standard Workflow
+### 12.1 Flight Workflow (Recommended)
+
+The `run_flight.py` orchestrator runs all five phases for an entire flight, with interactive pauses for picks and quality review:
+
+```bash
+# Process an entire flight end-to-end:
+python tools/LYRA/run_flight.py 126
+
+# Use ASTRA CBDs instead of OCR:
+python tools/LYRA/run_flight.py 127 --method manual
+
+# Resume from a specific phase (e.g. skip Phase 1 + 2):
+python tools/LYRA/run_flight.py 126 --resume-from 3
+
+# Skip the Phase 2 pause (picks already done):
+python tools/LYRA/run_flight.py 126 --skip-picks
+```
+
+The orchestrator:
+
+1. Runs Phase 1 on all TIFFs → prints a CBD table → pauses for review
+2. Launches `pick_calibration.py --flight {FLT}` for interactive picks (Q = next TIFF, Esc = quit)
+3. Runs Phase 3 on all TIFFs → prints a quality table with GOOD/CHECK flags → offers to fix CHECK TIFFs interactively
+4. Runs Phase 4 on all TIFFs (echo extraction)
+5. Runs Phase 5 (BEDMAP1 validation) → prints flight summary
+
+### 12.2 Single-TIFF Workflow
+
+For processing individual TIFFs (debugging, re-processing, or testing):
 
 ```bash
 # From repository root:
@@ -597,7 +640,7 @@ python tools/LYRA/calibrate.py Data/ascope/raw/125/40_0008400_0008424-reel_begin
 python tools/LYRA/echoes.py Data/ascope/raw/125/40_0008400_0008424-reel_begin_end.tiff
 ```
 
-### 12.2 Step 1 Options
+### 12.3 Phase 1 Options
 
 ```bash
 # Use structural OCR (default)
@@ -616,7 +659,21 @@ python tools/LYRA/echoes.py Data/ascope/raw/125/40_0008400_0008424-reel_begin_en
 --cbd-start 432
 ```
 
-### 12.3 Output Location
+### 12.4 Phase 2 Keyboard Controls
+
+| Key | Action |
+| --- | ------ |
+| M | Pick main bang position (t = 0) |
+| R | Pick reference line (known dB level) |
+| X | Pick x-grid line (major graticule) |
+| Y | Pick y-grid line (major graticule) |
+| N | Next frame (within current TIFF) |
+| Q | Save and quit (single mode) / save and advance to next TIFF (flight mode) |
+| Esc | Quit entirely (flight mode only) |
+
+Every TIFF needs **M + R + X** picks on at least one frame.
+
+### 12.5 Output Location
 
 All outputs are in `tools/LYRA/output/F{FLT}/`:
 
@@ -630,15 +687,17 @@ F125/
 ├── phase3/
 │   ├── F125_cal.csv               # Per-frame calibration
 │   └── F125_CBD*_cal.png          # Calibration diagnostic figures
-└── phase4/
-    ├── F125_echoes.csv            # Echo extraction results
-    └── F125_*_echoes.png          # Two-panel diagnostic figures
+├── phase4/
+│   ├── F125_echoes.csv            # Echo extraction results
+│   └── F125_*_echoes.png          # Two-panel diagnostic figures
+└── validation/
+    └── F125_validation.png        # BEDMAP1 comparison figure
 ```
 
-### 12.4 Troubleshooting
+### 12.6 Troubleshooting
 
 - **Fixes have no effect**: stale `.pyc` files. Run `find . -path "*/__pycache__/lyra*" -delete`
-- **Step 2 blocks with "no ref pick"**: run `pick_calibration.py`, press R on any frame, Q to save, then re-run Step 2
+- **Phase 3 blocks with "no ref pick"**: run `pick_calibration.py`, press R on any frame, Q to save, then re-run `calibrate.py`
 - **OCR gives wrong CBDs on F125 77xx TIFFs**: 3-digit CBDs cause the hundreds digit to be dropped. Use `--cbd-start N` or `--method manual`.
 - **Non-canonical TIFF filenames** (e.g. F141 files named `F141-C{start}_C{end}.tiff`): LYRA's `ensure_canonical_name()` auto-renames using `*_rename_log*.txt` in the same directory.
 
