@@ -45,7 +45,7 @@ TARGETS = [
 ]
 
 FLT = 127
-CAL_CSV = ROOT / f"tools/LYRA/output/F{FLT}/step2/F{FLT}_step2_cal.csv"
+CAL_CSV = ROOT / f"tools/LYRA/output/F{FLT}/phase3/F{FLT}_cal.csv"
 DIAG_DIR = ROOT / f"tools/LYRA/output/F{FLT}/diag"
 DIAG_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -69,7 +69,7 @@ for target in TARGETS:
     mb_x = cal["mb_x"]
 
     # ── Load frame ────────────────────────────────────────────────────────
-    idx_df = pd.read_csv(ROOT / f"tools/LYRA/output/F{FLT}/step1/F{FLT}_frame_index.csv", dtype=str)
+    idx_df = pd.read_csv(ROOT / f"tools/LYRA/output/F{FLT}/phase1/F{FLT}_frame_index.csv", dtype=str)
     idx_row = idx_df[(idx_df["tiff"] == tiff_name) &
                      (idx_df["frame_idx"] == str(fidx))].iloc[0]
     left_px = int(idx_row["left_px"])

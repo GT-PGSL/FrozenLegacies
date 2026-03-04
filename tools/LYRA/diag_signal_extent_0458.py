@@ -12,15 +12,15 @@ import matplotlib.patches as mpatches
 from PIL import Image
 from scipy.ndimage import gaussian_filter1d
 
-# ── Frame / calibration constants (from step1 + step2 CSVs) ──────────────────
+# ── Frame / calibration constants (from phase1 + phase3 CSVs) ─────────────────
 TIFF_PATH  = "Data/ascope/raw/125/40_0008400_0008424-reel_begin_end.tiff"
-FRAME_LEFT  = 1054          # step1: CBD 0458 left_px
-FRAME_RIGHT = 4061          # step1: CBD 0458 right_px
+FRAME_LEFT  = 1054          # phase1: CBD 0458 left_px
+FRAME_RIGHT = 4061          # phase1: CBD 0458 right_px
 
-MB_X        = 799           # step2: mb_x  (frame-relative)
-Y_REF_PX    = 1514.0        # step2: y_ref_px
-DB_PER_PX   = 0.047962      # step2
-US_PER_PX   = 0.00729785    # step2
+MB_X        = 799           # phase3: mb_x  (frame-relative)
+Y_REF_PX    = 1514.0        # phase3: y_ref_px
+DB_PER_PX   = 0.047962      # phase3
+US_PER_PX   = 0.00729785    # phase3
 Y_LO        = 300           # DEFAULT_CAL y_disp_lo
 Y_HI        = 1700          # DEFAULT_CAL y_disp_hi
 GRAT_HALF   = 5             # graticule mask half-width (px)
@@ -173,7 +173,7 @@ ax3.legend(fontsize=8, loc="upper right")
 ax3.set_xlim(0, W * US_PER_PX)
 
 plt.tight_layout()
-out_path = "tools/LYRA/output/F125/step3/diag_signal_extent_0458.png"
+out_path = "tools/LYRA/output/F125/phase4/diag_signal_extent_0458.png"
 import os; os.makedirs(os.path.dirname(out_path), exist_ok=True)
 plt.savefig(out_path, dpi=150, bbox_inches="tight")
 plt.close()

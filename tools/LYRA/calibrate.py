@@ -1,5 +1,5 @@
 """
-step2_calibrate.py — LYRA Step 2: Per-frame calibration
+calibrate.py — LYRA Phase 3: Per-frame calibration
 ========================================================
 For each complete frame in a TIFF, independently detects:
 
@@ -30,20 +30,20 @@ Usage
 -----
 Run from repo root:
 
-    python tools/LYRA/step2_calibrate.py [TIFF_PATH]
+    python tools/LYRA/calibrate.py [TIFF_PATH]
 
 If TIFF_PATH is omitted, defaults to the F125 training TIFF.
 
 Outputs
 -------
 Per-flight calibration CSV (updated incrementally):
-    tools/LYRA/output/F{FLT}/step2/F{FLT}_step2_cal.csv
+    tools/LYRA/output/F{FLT}/phase3/F{FLT}_cal.csv
       Columns: flight, tiff_id, frame_idx, cbd, file_id,
                mb_x, mb_power_dB, y_ref_px, db_per_px, us_per_px,
                x_spacing_px, hgrid_spacing, cal_source_y
 
 Per-frame diagnostic figure:
-    tools/LYRA/output/F{FLT}/step2/F{FLT}_{file_id}_step2.png
+    tools/LYRA/output/F{FLT}/phase3/F{FLT}_{file_id}_cal.png
       Red   dashed vertical   → main bang (t = 0 µs)
       Cyan  dashed horizontal → reference line (−60 dB)
       Gold  dashed horizontal → Y grid lines (extrapolated, every 10 dB)
@@ -83,35 +83,35 @@ else:
 TIFF = ensure_canonical_name(TIFF)
 
 try:
-    FLT = int(TIFF.parent.name)
+    FLT = int(TIFF.parent.name.lstrip("Ff"))
 except ValueError:
     FLT = 0
 
 
 TIFF_ID   = tiff_id(TIFF)
 OUT_DIR   = ROOT / f"tools/LYRA/output/F{FLT}"
-STEP1_DIR = OUT_DIR / "step1"
-STEP2_DIR = OUT_DIR / "step2"
-STEP2_DIR.mkdir(parents=True, exist_ok=True)
+PHASE1_DIR = OUT_DIR / "phase1"
+PHASE3_DIR = OUT_DIR / "phase3"
+PHASE3_DIR.mkdir(parents=True, exist_ok=True)
 
-INDEX_CSV    = STEP1_DIR / f"F{FLT}_frame_index.csv"
-CAL_CSV      = STEP2_DIR / f"F{FLT}_step2_cal.csv"
-PICKS_JSON   = STEP1_DIR / f"F{FLT}_cal_picks.json"
-DERIVED_JSON = STEP1_DIR / f"F{FLT}_cal_derived.json"
+INDEX_CSV    = PHASE1_DIR / f"F{FLT}_frame_index.csv"
+CAL_CSV      = PHASE3_DIR / f"F{FLT}_cal.csv"
+PICKS_JSON   = PHASE1_DIR / f"F{FLT}_cal_picks.json"
+DERIVED_JSON = PHASE1_DIR / f"F{FLT}_cal_derived.json"
 
 # ── Load frame index ───────────────────────────────────────────────────────────
 if not INDEX_CSV.exists():
     sys.exit(f"ERROR: frame index not found at {INDEX_CSV}\n"
-             "Run step1_detect_frames.py first.")
+             "Run phase 1 (detect_frames.py) first.")
 
 index     = pd.read_csv(INDEX_CSV, dtype=str)
 tiff_rows = index[index["tiff"] == TIFF.name].copy()
 
 if len(tiff_rows) == 0:
     sys.exit(f"ERROR: {TIFF.name} not found in frame index.\n"
-             "Run step1_detect_frames.py for this TIFF first.")
+             "Run phase 1 (detect_frames.py) for this TIFF first.")
 
-print(f"\nLYRA Step 2 — {TIFF.name}")
+print(f"\nLYRA Phase 3 — {TIFF.name}")
 print(f"  Flight : F{FLT}  |  tiff_id : {TIFF_ID}")
 print(f"  Frames in index: {len(tiff_rows)}  "
       f"(complete: {(tiff_rows.frame_type == 'complete').sum()})\n")
@@ -176,18 +176,39 @@ if tiff_d_anchor is None:
 # reel-begin artifacts where CRT hasn't settled; mb ~ 100–150 px in those frames).
 # Used as a soft guide for unguided frames in flights where DEFAULT_CAL's
 # mb_x_guess=800 is wrong (e.g. F141 where the real MB is at ~540 px).
-# For F125/F127 (MB ~ 800 px), the estimate ≈ 800 → no change in behaviour.
+#
+# Priority: per-TIFF picks first (handles TIFFs with MB at a different position
+# from the flight norm, e.g. F126 TIFF 2625 at ~730 px vs flight median ~580 px).
+# Falls back to flight-wide median only if no picks exist for this TIFF.
 tiff_mb_estimate: float | None = None
 if raw_picks:
-    _guided_mbs = [
+    # Determine which pick keys belong to the current TIFF
+    _this_tiff_keys = set()
+    for _, r in tiff_rows.iterrows():
+        if r["frame_type"] == "complete" and r["cbd"] and str(r["cbd"]) not in ("nan", ""):
+            _this_tiff_keys.add(f"CBD{r['cbd']}")
+        _this_tiff_keys.add(f"fr{r['frame_idx']}")
+
+    # Per-TIFF MB picks (preferred)
+    _tiff_mbs = [
+        float(raw_picks[k]["mb"]) for k in _this_tiff_keys
+        if k in raw_picks and raw_picks[k].get("mb") is not None
+        and not raw_picks[k].get("exclude") and float(raw_picks[k]["mb"]) > 200
+    ]
+    # Flight-wide MB picks (fallback)
+    _all_mbs = [
         float(p["mb"]) for p in raw_picks.values()
         if p.get("mb") is not None and not p.get("exclude")
         and float(p["mb"]) > 200
     ]
-    if _guided_mbs:
-        tiff_mb_estimate = float(np.median(_guided_mbs))
+    if _tiff_mbs:
+        tiff_mb_estimate = float(np.median(_tiff_mbs))
         print(f"  MB estimate   : {tiff_mb_estimate:.0f} px  "
-              f"(median of {len(_guided_mbs)} guided non-artifact MB pick(s))")
+              f"(median of {len(_tiff_mbs)} per-TIFF MB pick(s))")
+    elif _all_mbs:
+        tiff_mb_estimate = float(np.median(_all_mbs))
+        print(f"  MB estimate   : {tiff_mb_estimate:.0f} px  "
+              f"(flight-wide median of {len(_all_mbs)} guided MB pick(s))")
 
 # ── Identify tiff-level anchor ─────────────────────────────────────────────────
 # If any complete frame in this TIFF already has picks (e.g. collected by
@@ -260,7 +281,7 @@ if not tiff_anchor:
         f"  Press R to click the −60 dB reference line (noise floor baseline),\n"
         f"  then press Q to save and exit.\n\n"
         f"  Then re-run step 2:\n"
-        f"    python tools/LYRA/step2_calibrate.py {tiff_arg}\n"
+        f"    python tools/LYRA/calibrate.py {tiff_arg}\n"
     )
 
 
@@ -329,7 +350,7 @@ for _, row in tiff_rows.iterrows():
     left_px    = int(row["left_px"])
     right_px   = int(row["right_px"])
 
-    file_id = f"CBD{cbd}" if cbd else f"{TIFF_ID}_fr{frame_idx:02d}"
+    file_id = f"{TIFF_ID}_CBD{cbd}" if cbd else f"{TIFF_ID}_fr{frame_idx:02d}"
     fkey    = f"CBD{cbd}" if cbd else f"fr{frame_idx}"
 
     if frame_type == "partial":
@@ -343,7 +364,7 @@ for _, row in tiff_rows.iterrows():
         print(f"  {frame_idx:>3}  {str(cbd):>6}  {'—':>6}  {'—':>7}  "
               f"{'—':>6}  {'—':>7}  {'—':>6}  {'—':>5}  (EXCLUDED: {reason})")
         # Delete any stale figure left by a previous run before exclusion was added
-        stale_png = STEP2_DIR / f"F{FLT}_{file_id}_step2.png"
+        stale_png = PHASE3_DIR / f"F{FLT}_{file_id}_cal.png"
         if stale_png.exists():
             stale_png.unlink()
             print(f"       ↳ Deleted stale figure: {stale_png.name}")
@@ -528,7 +549,7 @@ for frame_idx in sorted(_frame_data):
     ax2.spines["top"].set_visible(False)
 
     fig.tight_layout()
-    fig_path = STEP2_DIR / f"F{FLT}_{file_id}_step2.png"
+    fig_path = PHASE3_DIR / f"F{FLT}_{file_id}_cal.png"
     fig.savefig(fig_path, dpi=150, bbox_inches="tight", facecolor="white")
     plt.close(fig)
 

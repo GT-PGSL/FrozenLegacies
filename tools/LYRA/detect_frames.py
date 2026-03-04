@@ -1,5 +1,5 @@
 """
-step1_detect_frames.py — LYRA Step 1: Frame Detection + CBD Recognition
+detect_frames.py — LYRA Phase 1: Frame Detection + CBD Recognition
 ========================================================================
 For any A-scope TIFF:
   1. Detects frame boundaries (complete vs partial)
@@ -14,7 +14,7 @@ Usage
 -----
 Run from repo root, passing the TIFF path as an argument:
 
-    python tools/LYRA/step1_detect_frames.py Data/ascope/raw/125/40_0008425_0008449-reel_begin_end.tiff
+    python tools/LYRA/detect_frames.py Data/ascope/raw/125/40_0008425_0008449-reel_begin_end.tiff
 
 Options:
     --method manual    Use human-verified CBDs from ASTRA CSV (ground truth)
@@ -26,17 +26,17 @@ Options:
 Outputs
 -------
 Master index (per flight, updated incrementally):
-    tools/LYRA/output/F{FLT}/step1/F{FLT}_frame_index.csv
+    tools/LYRA/output/F{FLT}/phase1/F{FLT}_frame_index.csv
       Columns: flight, tiff, tiff_id, frame_idx, frame_type, cbd,
                left_px, right_px, width_px, ocr_method, ocr_raw
 
 TIFF-level figures (named by tiff_id, never overwrite another TIFF's outputs):
-    tools/LYRA/output/F{FLT}/step1/F{FLT}_{tiff_id}_step1_contact.png
-    tools/LYRA/output/F{FLT}/step1/F{FLT}_{tiff_id}_step1_ocr_diag.png  (OCR methods only)
+    tools/LYRA/output/F{FLT}/phase1/F{FLT}_{tiff_id}_contact.png
+    tools/LYRA/output/F{FLT}/phase1/F{FLT}_{tiff_id}_ocr_diag.png  (OCR methods only)
 
 Per-frame outputs in later steps use:
-    CBD known   → F{FLT}_CBD{cbd}_step{N}_{desc}.ext
-    Partial     → F{FLT}_{tiff_id}_fr{frame_idx:02d}_step{N}_{desc}.ext
+    CBD known   → F{FLT}_{tiff_id}_CBD{cbd}_{desc}.ext
+    Partial     → F{FLT}_{tiff_id}_fr{frame_idx:02d}_{desc}.ext
 """
 
 from pathlib import Path
@@ -104,15 +104,15 @@ CBD_START_OVERRIDE: int | None = _args.cbd_start
 
 # Infer flight number from parent directory name
 try:
-    FLT = int(TIFF.parent.name)
+    FLT = int(TIFF.parent.name.lstrip("Ff"))
 except ValueError:
     FLT = 0
 
 TIFF_ID   = tiff_id(TIFF)
 OUT_DIR   = ROOT / f"tools/LYRA/output/F{FLT}"
-STEP1_DIR = OUT_DIR / "step1"
-STEP1_DIR.mkdir(parents=True, exist_ok=True)
-INDEX_CSV = STEP1_DIR / f"F{FLT}_frame_index.csv"
+PHASE1_DIR = OUT_DIR / "phase1"
+PHASE1_DIR.mkdir(parents=True, exist_ok=True)
+INDEX_CSV = PHASE1_DIR / f"F{FLT}_frame_index.csv"
 
 # ── Method-specific setup ─────────────────────────────────────────────────────
 OCR_METHOD = _args.method
@@ -292,16 +292,10 @@ if FRAME_OVERRIDES:
         anchors.sort()
         n_complete = len(complete_order)
 
-        # Backward from first anchor
-        first_pos, first_cbd, _ = anchors[0]
-        for p in range(first_pos - 1, -1, -1):
-            fi = complete_order[p]
-            new_cbd = f"{first_cbd - (first_pos - p):04d}"
-            old = cbd_by_frame.get(fi)
-            if old != new_cbd:
-                cbd_by_frame[fi] = new_cbd
-                ocr_raw_by_frame[fi] = f"(propagated:{new_cbd})"
-                FRAME_OVERRIDES[fi] = new_cbd  # mark for ocr_method column
+        # NOTE: No backward propagation from first anchor.
+        # CBDs can skip numbers (gaps in sequence), so backward-filling
+        # with sequential values is unreliable. Users should provide
+        # explicit anchors for earlier frames if needed.
 
         # Forward from each anchor to the next (or end)
         for ai in range(len(anchors)):
@@ -432,11 +426,11 @@ for ax in axes_flat[n:]:
     ax.set_visible(False)
 
 fig.suptitle(
-    f"LYRA Step 1 — F{FLT}  tiff_id {TIFF_ID}\n{TIFF.name}",
+    f"LYRA Phase 1 — F{FLT}  tiff_id {TIFF_ID}\n{TIFF.name}",
     fontsize=10, y=1.01,
 )
 fig.tight_layout()
-cs_path = STEP1_DIR / f"F{FLT}_{TIFF_ID}_step1_contact.png"
+cs_path = PHASE1_DIR / f"F{FLT}_{TIFF_ID}_contact.png"
 fig.savefig(cs_path, dpi=150, bbox_inches="tight", facecolor="white")
 plt.close(fig)
 print(f"\n  Contact sheet → {cs_path.relative_to(ROOT)}")
@@ -528,12 +522,12 @@ if method_used in ("segment", "ncc") and len(complete_indices) > 0:
     if OCR_METHOD == "segment":
         method_label = f"segment (θ={SEGMENT_THRESHOLD})"
     fig_d.suptitle(
-        f"LYRA Step 1 OCR Diagnostic — F{FLT}  tiff_id {TIFF_ID}\n"
+        f"LYRA Phase 1 OCR Diagnostic — F{FLT}  tiff_id {TIFF_ID}\n"
         f"Method: {method_label}  |  Anchors: {n_anchors}/{n_complete}",
         fontsize=10, y=1.02,
     )
     fig_d.tight_layout()
-    diag_path = STEP1_DIR / f"F{FLT}_{TIFF_ID}_step1_ocr_diag.png"
+    diag_path = PHASE1_DIR / f"F{FLT}_{TIFF_ID}_ocr_diag.png"
     fig_d.savefig(diag_path, dpi=150, bbox_inches="tight", facecolor="white")
     plt.close(fig_d)
     print(f"  OCR diagnostic → {diag_path.relative_to(ROOT)}")

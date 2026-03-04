@@ -1,6 +1,7 @@
 # ── Large data (never upload to GitHub) ──────────────────────
 Data/ascope/raw/          # 12 GB raw TIFF scans
 Data/zscope/              # Z-scope raw data
+Data/BEDMAP/              # BEDMAP1 reference grids
 Zipfiles/                 # Compressed archives
 
 # ── Science-critical files (hold until post-LYRA) ───────────

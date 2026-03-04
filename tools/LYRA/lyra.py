@@ -321,6 +321,16 @@ def _gauss_smooth(arr: np.ndarray, sigma: float) -> np.ndarray:
     return np.convolve(arr.astype(float), k, mode="same")
 
 
+def _running_median(arr: np.ndarray, window: int = 11) -> np.ndarray:
+    """Running median filter (rejects sporadic outliers, preserves real echoes)."""
+    out = arr.astype(float).copy()
+    hw  = window // 2
+    n   = len(arr)
+    for i in range(hw, n - hw):
+        out[i] = np.median(arr[i - hw : i + hw + 1])
+    return out
+
+
 # ── Frame boundary detection ───────────────────────────────────────────────────
 
 def detect_frames(img_norm: np.ndarray,
@@ -554,7 +564,7 @@ def detect_signal_extent(frame: np.ndarray,
 def extract_trace(frame: np.ndarray,
                   cal: dict,
                   robust: bool = False,
-                  mb_x: int | None = None) -> tuple[np.ndarray, np.ndarray]:
+                  mb_x: int | None = None) -> tuple[np.ndarray, np.ndarray, dict]:
     """
     Extract oscilloscope trace from one A-scope frame.
 
@@ -579,17 +589,23 @@ def extract_trace(frame: np.ndarray,
         3. Apply a coarse Gaussian smooth (σ=30) to the pre-filtered trace
            to obtain a stable "expected" row position for every column.
         4. Constrained argmin: at each column, restrict the search band to
-           [coarse − max_jump, coarse + max_jump] (max_jump = 250 px).
-           This rejects isolated film-grain dark pixels far from the true
-           trace while still following legitimate echo peaks.
-        5. Apply fine Gaussian smooth (σ=5) to the constrained result.
+           [coarse − 250, coarse + 250].  Wide enough for deep-ice bed
+           echoes (~500 px above NF) while rejecting gross outliers.
+        5. Running median (window=11) on the constrained trace to reject
+           sporadic film artifacts (1–5 columns of dark pixels at y=500–800
+           that produce phantom dips ~30 dB above NF in the post-echo
+           region).  Real echoes span hundreds of columns and are preserved.
+        6. Apply fine Gaussian smooth (σ=5) to the median-filtered result
+           → trace_y_s used for envelope walking.
 
         Why it works: film grain creates isolated 1–3 px dark hits; real
         echoes are 50–500 px wide.  The coarse smooth (σ=30) is largely
         unaffected by sparse grain hits (their total weight ≪ 1) but
         accurately tracks the broad echo envelope.  The ±250 px search
-        window is wide enough to capture strong echo peaks (surface rise
-        ≈ 900–1000 px) yet narrow enough to exclude stray grain.
+        window is wide enough to capture both shallow and deep-ice echoes.
+        The median filter then rejects any remaining sporadic artifacts
+        without narrowing the search window (which would miss deep-ice
+        bed echoes, as observed in F125 TIFF 8300).
 
     mb_x : int | None
         Main-bang column (frame-relative).  Required in robust mode.
@@ -664,15 +680,13 @@ def extract_trace(frame: np.ndarray,
         # T/R ringing zone → NF
         trace_pass1[mb_x:tr_end] = nf_row
 
-        # ── Pass 2: coarse smooth → constrained argmin within signal ─────────
-        # The coarse smooth is now stable because non-signal columns are at NF,
-        # not at random grain positions.  Within the signal region, constrain
-        # the argmin to ±max_jump of the expected (coarse) position — this
-        # rejects isolated film-grain dark pixels while following the real trace.
-        coarse = _gauss_smooth(trace_pass1, sigma=30.0)
-        max_jump = 250  # px; wide enough for echo peaks (~900 px rise)
-
-        trace_y = trace_pass1.copy()
+        # ── Constrained argmin (±250 px from coarse smooth) ──────────────────
+        # Single pass with ±250 px constraint.  Wide enough to reach deep-ice
+        # bed echoes (~500 px above NF) while rejecting gross outliers
+        # (film grain far from the CRT trace trajectory).
+        max_jump = 250
+        trace_y  = trace_pass1.copy()
+        coarse   = _gauss_smooth(trace_y, sigma=30.0)
         for col in range(sig_start, sig_end + 1):
             expected_row = coarse[col] - y_lo  # band-relative
             lo_row = max(0,  int(expected_row - max_jump))
@@ -680,18 +694,40 @@ def extract_trace(frame: np.ndarray,
             if lo_row < hi_row:
                 best_row = lo_row + np.argmin(band_gm[lo_row:hi_row, col])
                 trace_y[col] = best_row + y_lo
-
-        # Re-apply pre-MB raw argmin (not constrained — needed for NF estimation)
+        # Re-apply protected regions
         if pre_mb_start < pre_mb_end:
             trace_y[pre_mb_start:pre_mb_end] = trace_raw[pre_mb_start:pre_mb_end]
-        # Re-apply T/R ringing zone → NF
         trace_y[mb_x:tr_end] = nf_row
 
-        # ── Fine smooth (σ=5) for stable envelope walking ────────────────────
-        # Smooth the constrained trace (grain-resistant) for peak detection
-        # and envelope walking.
-        trace_constrained = trace_y
-        trace_y_s = _gauss_smooth(trace_constrained, sigma=5.0)
+        # ── Median filter + fine smooth for envelope walking ─────────────────
+        # The constrained trace may have sporadic film artifacts (1–5 columns
+        # where dark pixels at y=500–800 land within the ±250 band, producing
+        # phantom dips ~30 dB above NF).  These artifacts don't affect peak
+        # power reading (trace_y = trace_pass1 below), but they contaminate
+        # the smooth trace used for envelope walking — a single phantom dip
+        # resets the consecutive-below-NF count, extending the trailing edge.
+        #
+        # Running median (window=11) rejects artifacts spanning ≤5 columns
+        # while preserving real echoes (span hundreds of columns).
+        trace_constrained = trace_y.copy()
+        trace_mf = _running_median(trace_constrained, window=11)
+        trace_y_s = _gauss_smooth(trace_mf, sigma=5.0)
+
+        # ── Artifact detection data ────────────────────────────────────────
+        # Store per-column difference (in pixels) between the constrained
+        # trace and the median-filtered trace.  Positive values indicate
+        # that the median filter removed a downward artifact (constrained
+        # trace was pulled below the median by a film artifact).
+        # The per-column data is passed to step3, which checks for artifacts
+        # specifically in the post-bed region (artifacts elsewhere are
+        # benign for bed envelope estimation).
+        art_diff_px = trace_mf - trace_constrained  # positive = artifact removed
+        trace_info = dict(
+            art_diff_px   = art_diff_px,   # full per-column array
+            mb_x          = mb_x,
+            db_per_px     = cal["db_per_px"],
+            us_per_px     = cal["us_per_px"],
+        )
 
         # Return the UNCONSTRAINED pass-1 trace as trace_y for peak power
         # reading.  The constrained argmin cannot reach sharp echo peaks
@@ -704,8 +740,9 @@ def extract_trace(frame: np.ndarray,
     else:
         trace_y   = np.argmin(band_gm, axis=0).astype(float) + y_lo
         trace_y_s = _gauss_smooth(trace_y, cal["gauss_sigma"])
+        trace_info = dict(art_diff_px=None)
 
-    return trace_y.astype(int), trace_y_s
+    return trace_y.astype(int), trace_y_s, trace_info
 
 
 # ── Main bang detection ────────────────────────────────────────────────────────
@@ -771,13 +808,21 @@ def detect_mb(trace_y_s: np.ndarray, cal: dict,
                     _run = 0
 
             if crossing is not None:
+                # Collect ALL qualifying local minima in the search window,
+                # then pick the one closest to guide_x.  This prevents
+                # pre-main-bang artifacts from being selected over the real
+                # MB when both are within the Tier 1 window.
+                # (e.g. CBD 0457: artifact at x=757 vs real MB at x=812;
+                #  guide_x=810; closest-to-guide correctly picks x=812.)
                 min_depth = 15.0 / db_per_px
                 sub = region[crossing : min(len(region), crossing + 300)]
+                candidates = []  # list of (abs_x, depth_px)
                 for i in range(1, len(sub) - 1):
                     if sub[i] < sub[i - 1] and sub[i] < sub[i + 1]:
                         if (baseline - sub[i]) >= min_depth:
-                            mb_x = lo + crossing + i
-                            break
+                            candidates.append(lo + crossing + i)
+                if candidates:
+                    mb_x = min(candidates, key=lambda c: abs(c - guide_x))
 
     # ── Fallback tiers (when guided narrow-window found nothing) ─────────
     # Noise floor reference for all fallback tiers
@@ -1478,7 +1523,7 @@ def detect_frame_calibration(
                          10.0 / default_cal["db_per_px"])))
 
     # ── A: Main bang ──────────────────────────────────────────────────────
-    trace_y, trace_y_s = extract_trace(frame, cal)
+    trace_y, trace_y_s, _ = extract_trace(frame, cal)
     guide_mb           = guides.get("mb")
     mb_x               = detect_mb(trace_y_s, cal, guide_x=guide_mb)
     mb_power_dB        = float(px_to_db(float(trace_y_s[mb_x]), cal))
@@ -1584,7 +1629,7 @@ def process_tiff(tiff_path: str | Path,
             frame_idx=idx, frame_left=left, frame_right=right, frame_w=frame_w)
 
         try:
-            trace_y, trace_y_s = extract_trace(frame, cal)
+            trace_y, trace_y_s, _ = extract_trace(frame, cal)
             mb_x               = detect_mb(trace_y_s, cal)
             lf.mb_x            = mb_x
             lf.noise_floor_dB  = estimate_noise_floor(trace_y_s, mb_x, cal)

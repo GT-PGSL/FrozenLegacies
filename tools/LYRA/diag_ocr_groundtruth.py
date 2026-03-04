@@ -37,7 +37,7 @@ RAW_DIR = ROOT / f"Data/ascope/raw/{FLT}"
 OUT_DIR = ROOT / f"tools/LYRA/output/F{FLT}"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-INDEX_CSV = ROOT / f"tools/LYRA/output/F{FLT}/step1/F{FLT}_frame_index.csv"
+INDEX_CSV = ROOT / f"tools/LYRA/output/F{FLT}/phase1/F{FLT}_frame_index.csv"
 TMPL_PATH = ROOT / "tools/LYRA/digit_templates.npy"
 
 DEFAULT_TIFFS = ["7700", "7725", "8400", "8425"]

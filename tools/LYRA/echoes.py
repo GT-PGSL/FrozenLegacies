@@ -1,7 +1,7 @@
 """
-step3_echoes.py — LYRA Step 3: Surface/bed echo extraction
-==========================================================
-For each calibrated frame (from step2 CSV) extract surface and bed echoes:
+echoes.py — LYRA Phase 4: Surface/bed echo extraction
+============================================================
+For each calibrated frame (from phase3 cal CSV) extract surface and bed echoes:
 
   • Noise floor estimation (pre-bang 75th-percentile baseline)
   • Echo peak detection  (prominence ≥ 5 dB, distance ≥ 80 px)
@@ -18,7 +18,7 @@ Echo status:
   no_bed     — surface detected, no bed echo found
   no_surface — surface not detected; geometry undefined
 
-Per-frame calibration is taken directly from the step2 CSV (mb_x, y_ref_px,
+Per-frame calibration is taken directly from the phase3 cal CSV (mb_x, y_ref_px,
 db_per_px, us_per_px).  Detection parameters (prominence, distance, Gaussian σ)
 are taken from DEFAULT_CAL.
 
@@ -26,14 +26,14 @@ Usage
 -----
 Run from repo root:
 
-    python tools/LYRA/step3_echoes.py [TIFF_PATH]
+    python tools/LYRA/echoes.py [TIFF_PATH]
 
 If TIFF_PATH is omitted, defaults to the F125 training TIFF (40_0008400…).
 
 Outputs
 -------
 Per-flight echo CSV (updated incrementally):
-    tools/LYRA/output/F{FLT}/step3/F{FLT}_step3_echoes.csv
+    tools/LYRA/output/F{FLT}/phase4/F{FLT}_echoes.csv
       Columns: flight, tiff, cbd, file_id, echo_status,
                noise_floor_dB,
                surface_twt_us, surface_power_dB, surface_snr_dB,
@@ -45,8 +45,8 @@ Per-flight echo CSV (updated incrementally):
                h_air_m, h_ice_m, h_eff_m
 
 Per-frame diagnostic figure (two-panel):
-    tools/LYRA/output/F{FLT}/step3/F{FLT}_{file_id}_step3.png
-      Left  : frame image with echo markers (pixel space, same scale as step2)
+    tools/LYRA/output/F{FLT}/phase4/F{FLT}_{file_id}_echoes.png
+      Left  : frame image with echo markers (pixel space, same scale as phase3)
       Right : waveform in physical units (TWT µs vs power dB)
 """
 
@@ -87,46 +87,46 @@ else:
 TIFF = ensure_canonical_name(TIFF)
 
 try:
-    FLT = int(TIFF.parent.name)
+    FLT = int(TIFF.parent.name.lstrip("Ff"))
 except ValueError:
     FLT = 0
 
 
 TIFF_ID   = tiff_id(TIFF)
 OUT_DIR   = ROOT / f"tools/LYRA/output/F{FLT}"
-STEP1_DIR = OUT_DIR / "step1"
-STEP2_DIR = OUT_DIR / "step2"
-STEP3_DIR = OUT_DIR / "step3"
-STEP3_DIR.mkdir(parents=True, exist_ok=True)
+PHASE1_DIR = OUT_DIR / "phase1"
+PHASE3_DIR = OUT_DIR / "phase3"
+PHASE4_DIR = OUT_DIR / "phase4"
+PHASE4_DIR.mkdir(parents=True, exist_ok=True)
 
-INDEX_CSV  = STEP1_DIR / f"F{FLT}_frame_index.csv"
-CAL_CSV    = STEP2_DIR / f"F{FLT}_step2_cal.csv"
-ECHO_CSV   = STEP3_DIR / f"F{FLT}_step3_echoes.csv"
+INDEX_CSV  = PHASE1_DIR / f"F{FLT}_frame_index.csv"
+CAL_CSV    = PHASE3_DIR / f"F{FLT}_cal.csv"
+ECHO_CSV   = PHASE4_DIR / f"F{FLT}_echoes.csv"
 
 # ── Validate prerequisites ─────────────────────────────────────────────────────
 if not INDEX_CSV.exists():
     sys.exit(f"ERROR: frame index not found at {INDEX_CSV}\n"
-             "Run step1_detect_frames.py first.")
+             "Run phase 1 (detect_frames.py) first.")
 
 if not CAL_CSV.exists():
-    sys.exit(f"ERROR: step2 calibration CSV not found at {CAL_CSV}\n"
-             "Run step2_calibrate.py first.")
+    sys.exit(f"ERROR: phase 3 calibration CSV not found at {CAL_CSV}\n"
+             "Run phase 3 (calibrate.py) first.")
 
-# ── Load step1 frame index ─────────────────────────────────────────────────────
+# ── Load phase1 frame index ───────────────────────────────────────────────────
 index     = pd.read_csv(INDEX_CSV, dtype=str)
 tiff_rows = index[index["tiff"] == TIFF.name].copy()
 
 if len(tiff_rows) == 0:
     sys.exit(f"ERROR: {TIFF.name} not found in frame index.\n"
-             "Run step1_detect_frames.py for this TIFF first.")
+             "Run phase 1 (detect_frames.py) for this TIFF first.")
 
-# ── Load step2 calibration CSV ─────────────────────────────────────────────────
+# ── Load phase3 calibration CSV ────────────────────────────────────────────────
 cal_df    = pd.read_csv(CAL_CSV, dtype=str)
 tiff_cals = cal_df[cal_df["tiff"] == TIFF.name].copy()
 
 if len(tiff_cals) == 0:
-    sys.exit(f"ERROR: No step2 calibration rows for {TIFF.name} in {CAL_CSV}\n"
-             "Run step2_calibrate.py for this TIFF first.")
+    sys.exit(f"ERROR: No phase 3 calibration rows for {TIFF.name} in {CAL_CSV}\n"
+             "Run phase 3 (calibrate.py) for this TIFF first.")
 
 # Build frame_idx → calibration dict mapping (skip excluded frames)
 frame_cal: dict[int, dict] = {}
@@ -207,7 +207,7 @@ for _, idx_row in tiff_rows.iterrows():
     # Use robust mode: constrained-argmin rejects film-grain artefacts and
     # T/R ringing noise that would otherwise create fake peaks in the flat
     # region between the main bang and the first real echo.
-    trace_y, trace_y_s = extract_trace(frame, cal, robust=True, mb_x=mb_x)
+    trace_y, trace_y_s, trace_info = extract_trace(frame, cal, robust=True, mb_x=mb_x)
     noise_floor_dB     = estimate_noise_floor(trace_y_s, mb_x, cal)
 
     # ── Detect surface and bed echoes ──────────────────────────────────────────
@@ -231,6 +231,37 @@ for _, idx_row in tiff_rows.iterrows():
         echo_status = "weak_bed"
     else:
         echo_status = "good"
+
+    # ── Bed envelope artifact flag ───────────────────────────────────────────
+    # Check whether film artifacts exist in the post-bed region (between
+    # the bed peak and the NF+5 trailing edge + 1 µs margin).  Artifacts
+    # here bias the trailing edge, inflating width_5, asymmetry, and
+    # trailing_tail.  Detection: compare constrained trace vs median-
+    # filtered trace (art_diff_px from extract_trace).  Columns where the
+    # median filter removed a >10 dB dip in this region are flagged.
+    #
+    # Artifacts elsewhere (pre-MB, surface-bed gap, pre-surface) are
+    # benign for bed envelope estimation and are not flagged.
+    bed_envelope_suspect = False
+    art_max_dB = 0.0
+    art_diff_px = trace_info.get("art_diff_px")
+    if bed is not None and art_diff_px is not None:
+        bed_trail_5 = getattr(bed, "trail_5_us", np.nan)
+        if not np.isnan(bed_trail_5):
+            # Check region: bed_peak to trail_5 + 1 µs
+            us_per_px = cal["us_per_px"]
+            db_per_px = cal["db_per_px"]
+            post_bed_start = bed.peak_x
+            post_bed_end   = min(len(art_diff_px),
+                                 mb_x + int((bed_trail_5 + 1.0) / us_per_px))
+            if post_bed_start < post_bed_end:
+                region = art_diff_px[post_bed_start:post_bed_end]
+                # >10 dB discrepancy = significant artifact
+                art_thresh_px = 10.0 / db_per_px
+                art_mask = region > art_thresh_px
+                if np.any(art_mask):
+                    art_max_dB = float(np.max(region[art_mask]) * db_per_px)
+                    bed_envelope_suspect = True
 
     # ── Derived geometry ───────────────────────────────────────────────────────
     h_air_m = h_ice_m = h_eff_m = np.nan
@@ -289,6 +320,8 @@ for _, idx_row in tiff_rows.iterrows():
         bed_asymmetry         = round(_e(bed, "asymmetry"),      3),
         bed_leading_rise_us   = round(_e(bed, "leading_rise_us"),  4),
         bed_trailing_tail_us  = round(_e(bed, "trailing_tail_us"), 4),
+        bed_envelope_suspect  = bed_envelope_suspect,
+        artifact_max_dB       = round(art_max_dB, 1),
         # Geometry
         h_air_m = round(h_air_m, 1) if not np.isnan(h_air_m) else np.nan,
         h_ice_m = round(h_ice_m, 1) if not np.isnan(h_ice_m) else np.nan,
@@ -429,7 +462,7 @@ for _, idx_row in tiff_rows.iterrows():
                       edgecolor="gray", alpha=0.8),
         )
 
-    fig_path = STEP3_DIR / f"F{FLT}_{file_id}_step3.png"
+    fig_path = PHASE4_DIR / f"F{FLT}_{file_id}_echoes.png"
     fig.savefig(fig_path, dpi=150, bbox_inches="tight", facecolor="white")
     plt.close(fig)
 
@@ -448,7 +481,7 @@ if echo_rows:
     # ── Summary statistics ─────────────────────────────────────────────────────
     print(f"\n{'─' * 60}")
     print(f"  Echo CSV → {ECHO_CSV.relative_to(ROOT)}")
-    print(f"  Step 3 figures → {STEP3_DIR.relative_to(ROOT)}/")
+    print(f"  Phase 4 figures → {PHASE4_DIR.relative_to(ROOT)}/")
     print(f"  Frames processed : {len(echo_rows)}")
 
     statuses = [r["echo_status"] for r in echo_rows]

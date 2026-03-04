@@ -18,18 +18,22 @@ A collaboration between **Georgia Tech**, **Stanford University**, and **Colorad
 
 Fully algorithmic A-scope waveform extraction pipeline designed for raw ASCOPE TIFF scans of oscilloscope film.
 
-| Step | Script | Output |
-|------|--------|--------|
-| 1. Frame detection + CBD assignment | `step1_detect_frames.py` | `frame_index.csv`, contact sheet, OCR diagnostics |
-| 2. Grid calibration | `step2_calibrate.py` | Per-frame calibration CSV + diagnostic figures |
-| 3. Echo extraction | `step3_echoes.py` | Surface/bed TWT, power, SNR, width, h_air, h_ice |
+| Phase | Script | Output |
+|-------|--------|--------|
+| 1. Frame detection + CBD assignment | `detect_frames.py` | `frame_index.csv`, contact sheet, OCR diagnostics |
+| 2. Interactive calibration picks | `pick_calibration.py` | `cal_picks.json` |
+| 3. Grid calibration | `calibrate.py` | Per-frame calibration CSV + diagnostic figures |
+| 4. Echo extraction | `echoes.py` | Surface/bed TWT, power, SNR, width, h_air, h_ice |
 
 ```bash
-# Typical workflow
-python tools/LYRA/step1_detect_frames.py Data/ascope/raw/125/40_0008400_0008424-reel_begin_end.tiff
-python tools/LYRA/pick_calibration.py    Data/ascope/raw/125/40_0008400_0008424-reel_begin_end.tiff
-python tools/LYRA/step2_calibrate.py     Data/ascope/raw/125/40_0008400_0008424-reel_begin_end.tiff
-python tools/LYRA/step3_echoes.py        Data/ascope/raw/125/40_0008400_0008424-reel_begin_end.tiff
+# Typical single-TIFF workflow
+python tools/LYRA/detect_frames.py    Data/ascope/raw/125/40_0008400_0008424-reel_begin_end.tiff
+python tools/LYRA/pick_calibration.py Data/ascope/raw/125/40_0008400_0008424-reel_begin_end.tiff
+python tools/LYRA/calibrate.py        Data/ascope/raw/125/40_0008400_0008424-reel_begin_end.tiff
+python tools/LYRA/echoes.py           Data/ascope/raw/125/40_0008400_0008424-reel_begin_end.tiff
+
+# Or run an entire flight automatically:
+python tools/LYRA/run_flight.py 126
 ```
 
 **Validated on**: F125 (60 frames), F127 (38 frames), F141 (12 frames).

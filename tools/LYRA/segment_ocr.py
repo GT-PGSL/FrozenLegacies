@@ -4,7 +4,7 @@ segment_ocr.py — 7-segment structural digit recognition for LYRA
 Instead of pixel-level NCC, identifies which of the 7 segments are lit
 by measuring ink density in spatial zones. Position-invariant by design.
 
-Production API (imported by step1_detect_frames.py):
+Production API (imported by detect_frames.py):
     from segment_ocr import recognize_frame_structural, SEGMENT_THRESHOLD
 
 Prototype mode (run standalone for training/evaluation):
@@ -48,7 +48,7 @@ SEGMENT_THRESHOLD = 0.26
 FLT = 125
 RAW_DIR = ROOT / f"Data/ascope/raw/{FLT}"
 OUT_DIR = ROOT / f"tools/LYRA/output/F{FLT}/step0"
-INDEX_CSV = ROOT / f"tools/LYRA/output/F{FLT}/step1/F{FLT}_frame_index.csv"
+INDEX_CSV = ROOT / f"tools/LYRA/output/F{FLT}/phase1/F{FLT}_frame_index.csv"
 TRAIN_TIFFS = ["7700", "7725", "8400", "8425"]
 TEST_TIFFS = ["8300"]
 
@@ -229,7 +229,7 @@ def crop_and_resize_digit(binary, s, e, med_blob_w, pad=4):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Production API — imported by step1_detect_frames.py
+# Production API — imported by detect_frames.py
 # ═══════════════════════════════════════════════════════════════════════════
 
 def recognize_frame_structural(frame_crop, H, fw,
