@@ -23,7 +23,8 @@ Fully algorithmic A-scope waveform extraction pipeline designed for raw ASCOPE T
 | 1. Frame detection + CBD assignment | `detect_frames.py` | `frame_index.csv`, contact sheet, OCR diagnostics |
 | 2. Interactive calibration picks | `pick_calibration.py` | `cal_picks.json` |
 | 3. Grid calibration | `calibrate.py` | Per-frame calibration CSV + diagnostic figures |
-| 4. Echo extraction | `echoes.py` | Surface/bed TWT, power, SNR, width, h_air, h_ice |
+| 4. Echo extraction + review | `echoes.py` | Surface/bed TWT, power, SNR, width, h_air, h_ice + review overrides |
+| 5. Validation | `validate_flight.py` | BEDMAP1 comparison figure + flight summary |
 
 ```bash
 # Typical single-TIFF workflow
@@ -36,7 +37,7 @@ python tools/LYRA/echoes.py           Data/ascope/raw/125/40_0008400_0008424-ree
 python tools/LYRA/run_flight.py 126
 ```
 
-**Validated on**: F125 (60 frames), F127 (38 frames), F141 (12 frames).
+**Validated on**: F125 (258 frames), F126 (300 frames), F127 (38 frames), F141 (12 frames).
 
 ### Other Tools
 
@@ -62,12 +63,12 @@ python tools/LYRA/run_flight.py 126
 | F114 | Deep interior (85°S) | 206 | ASTRA complete |
 | F115 | Ross Ice Shelf | 405 | ASTRA complete |
 | F125 | Roosevelt Island / Ross Ice Shelf | 565 | LYRA validated |
-| F126 | Ross Ice Shelf margin | 223 | ASTRA complete |
-| F127 | Ross Ice Shelf central | 570 | LYRA validated |
+| F126 | Ross Ice Shelf margin | 223 | LYRA complete (37.7% yield) |
+| F127 | Ross Ice Shelf central | 570 | LYRA processing |
 | F128 | Ross Ice Shelf | 760 | ASTRA complete |
 | F137 | Ross Ice Shelf NW | 146 | ASTRA complete |
 | F138 | Ross Ice Shelf | 323 | ASTRA complete |
-| F141 | Ross Ice Shelf | 498 | LYRA validated |
+| F141 | Ross Ice Shelf | 498 | LYRA phase 3 validated |
 | F143 | Ross Ice Shelf / Siple Coast | 646 | ASTRA complete |
 
 ## System Parameters

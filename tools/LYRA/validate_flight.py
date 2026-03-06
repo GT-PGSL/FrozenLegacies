@@ -11,11 +11,13 @@ Reads the Phase 4 echoes CSV for the given flight, compares against:
 
 Output:
     tools/LYRA/output/F{FLT}/validation/F{FLT}_validation.png
+    tools/LYRA/output/F{FLT}/validation/F{FLT}_validation.json
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -33,7 +35,7 @@ from scipy.spatial import cKDTree
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from plot_flight_tracks import load_basemap_ps, _graticule_line, _meridian_line, _geo_label
 
-# ── Paths (relative to repo root) ────────────────────────────────────────────
+# -- Paths (relative to repo root) --------------------------------------------
 
 REPO = Path(__file__).resolve().parent.parent.parent  # FrozenLegacies/
 NAV_DIR = REPO / "Navigation_Files"
@@ -41,7 +43,7 @@ BEDMAP_SHP = REPO / "Data" / "BEDMAP" / "BedMap1" / "bedmap1_clip.shp"
 RIGGS_XLSX = REPO / "Data" / "RIGGS" / "RIGGS_H_Ice.xlsx"
 OUTPUT_BASE = Path(__file__).resolve().parent / "output"
 
-# ── Constants ─────────────────────────────────────────────────────────────────
+# -- Constants -----------------------------------------------------------------
 
 MATCH_RADIUS_M = 20_000  # max distance (m) for nearest-neighbour match
 NAV_MISSING = 9999       # sentinel for missing THK/SRF in Navigation CSVs
@@ -51,12 +53,12 @@ ASTRA_DIR = REPO / "Data" / "ascope" / "picks"
 C_ICE = 168.0   # m/µs
 C_AIR = 300.0   # m/µs
 
-# BEDMAP1 mission IDs ─────────────────────────────────────────────────────────
+# BEDMAP1 mission IDs ---------------------------------------------------------
 # SPRI_7475 is the same SPRI/NSF/TUD 1974-75 data that LYRA reprocesses
 # (comparison is circular). All other missions are independent.
 SAME_SOURCE_MISSIONS = {"SPRI_7475"}
 
-# ColorBrewer-based palette ────────────────────────────────────────────────────
+# ColorBrewer-based palette ----------------------------------------------------
 STATUS_COLORS = {
     "good":       "#1b9e77",   # teal-green (ColorBrewer Dark2)
     "weak_bed":   "#d95f02",   # orange
@@ -79,7 +81,7 @@ SPRI_COLOR        = "#2166ac"   # blue (same-source, circular)
 _TRANSFORM = Transformer.from_crs("EPSG:4326", "EPSG:3031", always_xy=True)
 
 
-# ── Publication figure styling ────────────────────────────────────────────────
+# -- Publication figure styling ------------------------------------------------
 
 def _setup_rcparams():
     plt.rcParams.update({
@@ -114,7 +116,7 @@ def _panel_label(ax, label, x=0.015, y=0.97):
             bbox=dict(facecolor="white", edgecolor="none", pad=1.5, alpha=0.7))
 
 
-# ── Data loading ──────────────────────────────────────────────────────────────
+# -- Data loading --------------------------------------------------------------
 
 def load_echoes(flt: int) -> pd.DataFrame:
     """Load all step3 echoes for a flight."""
@@ -219,7 +221,7 @@ def load_riggs_stations() -> pd.DataFrame | None:
                "x_ps", "y_ps"]].reset_index(drop=True)
 
 
-# ── Core logic ────────────────────────────────────────────────────────────────
+# -- Core logic ----------------------------------------------------------------
 
 def merge_with_nav(echoes: pd.DataFrame, nav: pd.DataFrame) -> pd.DataFrame:
     """Join echoes with navigation on CBD."""
@@ -259,7 +261,7 @@ def _extract_ref_arrays(gdf: gpd.GeoDataFrame
     return xy, thk
 
 
-# ── Inset map helper ─────────────────────────────────────────────────────────
+# -- Inset map helper ---------------------------------------------------------
 
 def _draw_inset_map(ax_map, nav, merged, status, riggs_df, spri_gdf, flt):
     """Draw spatial context map on the given inset axes.
@@ -349,22 +351,59 @@ def _draw_inset_map(ax_map, nav, merged, status, riggs_df, spri_gdf, flt):
                        linewidths=0.2, marker="D", alpha=0.2, zorder=1.5,
                        label="BEDMAP1 SPRI")
 
-    # RIGGS stations — seismic vs radar
+    # RIGGS stations — seismic vs radar, filled if matched to flight
     if riggs_df is not None and len(riggs_df) > 0:
+        # Determine which stations were matched (used in left panel comparison)
+        matched_stns = set()
+        if "riggs_stn_idx" in merged.columns:
+            idx_vals = merged["riggs_stn_idx"].dropna().values
+            matched_stns = set(int(i) for i in idx_vals if i >= 0)
+        # Map riggs_df row positions to their original index for matching
+        riggs_idx = riggs_df.index.values
+        is_matched = np.isin(riggs_idx, list(matched_stns))
+
         seis = riggs_df[riggs_df["source"] == "seismic"]
         radar = riggs_df[riggs_df["source"] == "radar"]
+        seis_matched = np.isin(seis.index.values, list(matched_stns))
+        radar_matched = np.isin(radar.index.values, list(matched_stns))
+
+        # Plot unmatched (hollow) then matched (filled) for each source
         if len(seis) > 0:
-            ax_map.scatter(seis["x_ps"].values, seis["y_ps"].values,
-                           s=12, facecolors="none",
-                           edgecolors=RIGGS_SEIS_COLOR,
-                           linewidths=0.6, marker="s", zorder=6,
-                           label="RIGGS seismic")
+            seis_label_used = False
+            if (~seis_matched).any():
+                ax_map.scatter(seis.loc[~seis_matched, "x_ps"].values,
+                               seis.loc[~seis_matched, "y_ps"].values,
+                               s=12, facecolors="none",
+                               edgecolors=RIGGS_SEIS_COLOR,
+                               linewidths=0.6, marker="s", zorder=6,
+                               label="RIGGS seismic")
+                seis_label_used = True
+            if seis_matched.any():
+                ax_map.scatter(seis.loc[seis_matched, "x_ps"].values,
+                               seis.loc[seis_matched, "y_ps"].values,
+                               s=16, facecolors=RIGGS_SEIS_COLOR,
+                               edgecolors=RIGGS_SEIS_COLOR,
+                               linewidths=0.6, marker="s", zorder=6.5,
+                               label=("_nolegend_" if seis_label_used
+                                      else "RIGGS seismic"))
         if len(radar) > 0:
-            ax_map.scatter(radar["x_ps"].values, radar["y_ps"].values,
-                           s=10, facecolors="none",
-                           edgecolors=RIGGS_RADAR_COLOR,
-                           linewidths=0.5, marker="s", zorder=5.5,
-                           label="RIGGS radar")
+            radar_label_used = False
+            if (~radar_matched).any():
+                ax_map.scatter(radar.loc[~radar_matched, "x_ps"].values,
+                               radar.loc[~radar_matched, "y_ps"].values,
+                               s=10, facecolors="none",
+                               edgecolors=RIGGS_RADAR_COLOR,
+                               linewidths=0.5, marker="s", zorder=5.5,
+                               label="RIGGS radar")
+                radar_label_used = True
+            if radar_matched.any():
+                ax_map.scatter(radar.loc[radar_matched, "x_ps"].values,
+                               radar.loc[radar_matched, "y_ps"].values,
+                               s=14, facecolors=RIGGS_RADAR_COLOR,
+                               edgecolors=RIGGS_RADAR_COLOR,
+                               linewidths=0.5, marker="s", zorder=6,
+                               label=("_nolegend_" if radar_label_used
+                                      else "RIGGS radar"))
 
     # Geographic labels (only those visible in extent)
     for lon, lat, text, fs in [
@@ -415,7 +454,7 @@ def _draw_inset_map(ax_map, nav, merged, status, riggs_df, spri_gdf, flt):
         spine.set_linewidth(0.6)
 
 
-# ── Figure generation ─────────────────────────────────────────────────────────
+# -- Figure generation ---------------------------------------------------------
 
 def make_validation_figure(merged: pd.DataFrame, flt: int, out_path: Path,
                            nav: pd.DataFrame | None = None,
@@ -436,14 +475,14 @@ def make_validation_figure(merged: pd.DataFrame, flt: int, out_path: Path,
     # Count statistics
     counts = {st: int((status == st).sum()) for st in STATUS_ORDER}
 
-    # ── Layout: along-track panel + side map ─────────────────────────────
+    # -- Layout: along-track panel + side map -----------------------------
 
     fig = plt.figure(figsize=(12, 4.5))
     gs = fig.add_gridspec(1, 2, width_ratios=[1.8, 1], wspace=0.30,
                           left=0.06, right=0.97, top=0.88, bottom=0.12)
     ax_thk = fig.add_subplot(gs[0, 0])
 
-    # ── Main panel: Along-track ice thickness ─────────────────────────────
+    # -- Main panel: Along-track ice thickness -----------------------------
 
     # RIGGS (independent) — seismic vs radar distinction
     has_riggs = "riggs_ice" in merged.columns
@@ -551,7 +590,7 @@ def make_validation_figure(merged: pd.DataFrame, flt: int, out_path: Path,
     ax_thk.legend(loc="upper right", markerscale=1.2, handletextpad=0.4,
                   fontsize=6.5)
 
-    # ── Title ─────────────────────────────────────────────────────────────
+    # -- Title -------------------------------------------------------------
 
     subtitle_parts = []
     for st in STATUS_ORDER:
@@ -564,7 +603,7 @@ def make_validation_figure(merged: pd.DataFrame, flt: int, out_path: Path,
     fig.text(panel_center, 0.935, " | ".join(subtitle_parts),
              ha="center", fontsize=7, color="#666666")
 
-    # ── Map panel ─────────────────────────────────────────────────────────
+    # -- Map panel ---------------------------------------------------------
 
     ax_map = fig.add_subplot(gs[0, 1])
     _draw_inset_map(ax_map, nav, merged, status, riggs_df, spri_gdf, flt)
@@ -576,7 +615,23 @@ def make_validation_figure(merged: pd.DataFrame, flt: int, out_path: Path,
     print(f"  Validation figure \u2192 {out_path}")
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+# -- Main ----------------------------------------------------------------------
+
+def _comparison_stats(lyra_vals: np.ndarray, ref_vals: np.ndarray) -> dict:
+    """Compute comparison statistics between LYRA and a reference dataset."""
+    diff = lyra_vals - ref_vals
+    stats = {
+        "n": int(len(diff)),
+        "mean_diff_m": round(float(np.mean(diff)), 1),
+        "std_diff_m": round(float(np.std(diff)), 1),
+        "rmse_m": round(float(np.sqrt(np.mean(diff**2))), 1),
+        "median_abs_diff_m": round(float(np.median(np.abs(diff))), 1),
+    }
+    if len(diff) >= 3:
+        r = np.corrcoef(ref_vals, lyra_vals)[0, 1]
+        stats["correlation_r"] = round(float(r), 3)
+    return stats
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -588,13 +643,15 @@ def main():
     args = parser.parse_args()
 
     flt = args.flight
+    report: dict = {"flight": flt, "match_radius_km": args.radius / 1000}
     print(f"LYRA Validation \u2014 F{flt}")
 
-    # Load data
+    # -- Echoes ------------------------------------------------------------
     print("  Loading phase 4 echoes ...")
     echoes = load_echoes(flt)
     print(f"    {len(echoes)} frames")
 
+    # -- Navigation --------------------------------------------------------
     print("  Loading navigation ...")
     nav = load_navigation(flt)
     print(f"    {len(nav)} CBDs with coordinates")
@@ -604,7 +661,56 @@ def main():
     n_with_nav = int(merged["has_nav"].sum())
     print(f"    {n_with_nav}/{len(merged)} frames matched to coordinates")
 
-    # Load ASTRA picks (primary validation -- same frames, d = 0)
+    # Echo status breakdown
+    status_counts = merged["echo_status"].value_counts().to_dict()
+    cbd_vals = merged["cbd"].dropna()
+    tiffs = merged["tiff_id"].unique() if "tiff_id" in merged.columns else []
+    good_ice = merged.loc[merged["echo_status"] == "good", "h_ice_m"]
+
+    report["echoes"] = {
+        "total_frames": len(merged),
+        "n_tiffs": len(tiffs),
+        "cbd_range": ([int(cbd_vals.min()), int(cbd_vals.max())]
+                      if len(cbd_vals) > 0 else None),
+        "echo_status": {k: int(v) for k, v in status_counts.items()},
+    }
+    if len(good_ice) > 0:
+        report["echoes"]["h_ice_good_frames"] = {
+            "min": round(float(good_ice.min()), 1),
+            "max": round(float(good_ice.max()), 1),
+            "mean": round(float(good_ice.mean()), 1),
+            "median": round(float(good_ice.median()), 1),
+        }
+
+    # Per-status frame lists (for quick review of problem frames)
+    phase4_dir = OUTPUT_BASE / f"F{flt}" / "phase4"
+    for st in ("no_bed", "no_surface", "weak_bed"):
+        subset = merged[merged["echo_status"] == st]
+        if len(subset) == 0:
+            continue
+        frames = []
+        for _, row in subset.iterrows():
+            cbd = int(row["cbd"]) if pd.notna(row["cbd"]) else None
+            tid = row.get("tiff_id", "")
+            file_id = row.get("file_id", "")
+            entry = {"cbd": cbd, "tiff_id": str(tid)}
+            # Include diagnostic PNG path if it exists
+            if file_id:
+                png = phase4_dir / f"F{flt}_{file_id}_echoes.png"
+                if png.exists():
+                    entry["diagnostic_png"] = str(png)
+            frames.append(entry)
+        # Sort by CBD for easy scanning
+        frames.sort(key=lambda f: f["cbd"] if f["cbd"] is not None else 0)
+        report["echoes"][f"{st}_frames"] = frames
+
+    report["navigation"] = {
+        "nav_cbds": len(nav),
+        "frames_with_nav": n_with_nav,
+        "frames_total": len(merged),
+    }
+
+    # -- ASTRA (primary validation — same frames, d = 0) ------------------
     print("  Loading ASTRA picks ...")
     astra = load_astra(flt)
     if astra is not None:
@@ -616,10 +722,15 @@ def main():
                 merged.drop(columns=c, inplace=True)
         n_astra = int(merged["h_ice_astra"].notna().sum())
         print(f"    {n_astra}/{n_before} frames matched to ASTRA picks")
+        report["astra"] = {
+            "frames_matched": n_astra,
+            "frames_total": n_before,
+        }
     else:
         print("    No ASTRA picks found for this flight")
+        report["astra"] = None
 
-    # Load RIGGS stations (independent seismic/radar, Bentley 1984)
+    # -- RIGGS (independent seismic/radar, Bentley 1984) -------------------
     print("  Loading RIGGS stations ...")
     riggs_df = load_riggs_stations()
     has_coords = merged["has_nav"] & merged["LAT"].notna() & merged["LON"].notna()
@@ -651,26 +762,52 @@ def main():
         n_riggs = int(np.isfinite(r_ice).sum())
         unique_stns = set(r_idx[r_idx >= 0])
         n_riggs_stns = len(unique_stns)
-        n_seis = sum(1 for i in unique_stns
-                     if riggs_df.iloc[i]["source"] == "seismic")
+        n_total_seis = int(riggs_df["source"].eq("seismic").sum())
+        n_total_radar = int(riggs_df["source"].eq("radar").sum())
+        n_matched_seis = sum(1 for i in unique_stns
+                             if riggs_df.iloc[i]["source"] == "seismic")
+        n_matched_radar = n_riggs_stns - n_matched_seis
         print(f"    {len(riggs_df)} stations loaded "
-              f"({riggs_df['source'].eq('seismic').sum()} seismic, "
-              f"{riggs_df['source'].eq('radar').sum()} radar)")
+              f"({n_total_seis} seismic, {n_total_radar} radar)")
         print(f"    Matches within {args.radius/1000:.0f} km: "
               f"{n_riggs} points \u2192 {n_riggs_stns} stations "
-              f"({n_seis} seismic, {n_riggs_stns - n_seis} radar)")
+              f"({n_matched_seis} seismic, {n_matched_radar} radar)")
+        riggs_stations = []
         for idx in sorted(unique_stns):
             stn = riggs_df.iloc[idx]
             pts_mask = r_idx == idx
             md = np.median(r_dist[pts_mask]) / 1000
             print(f"      {stn['Station']:6s}  {stn['h_ice']:.0f} m "
                   f"({stn['source']})  d\u0303={md:.1f} km")
+            riggs_stations.append({
+                "station": stn["Station"],
+                "h_ice_m": round(float(stn["h_ice"]), 0),
+                "source": stn["source"],
+                "median_dist_km": round(md, 1),
+                "n_matched_frames": int(pts_mask.sum()),
+            })
+        report["riggs"] = {
+            "database": {
+                "total": len(riggs_df),
+                "seismic": n_total_seis,
+                "radar": n_total_radar,
+            },
+            "matched": {
+                "stations": n_riggs_stns,
+                "seismic": n_matched_seis,
+                "radar": n_matched_radar,
+                "total_frame_matches": n_riggs,
+            },
+            "stations": riggs_stations,
+        }
     elif riggs_df is None:
         print("    RIGGS_H_Ice.xlsx not found")
+        report["riggs"] = None
     else:
         print("    No coordinates available for RIGGS matching")
+        report["riggs"] = None
 
-    # Load BEDMAP1 SPRI (same-source, for spatial context only)
+    # -- BEDMAP1 SPRI (same-source, spatial context only) ------------------
     print("  Loading BEDMAP1 SPRI ...")
     spri_gdf_map = None
     if BEDMAP_SHP.exists() and has_coords.any():
@@ -698,10 +835,16 @@ def main():
                 & (spri_gdf["PS_y"] <= flt_y.max() + margin)
             ]
             print(f"    {len(spri_gdf_map)} BEDMAP1 SPRI points in map region")
+            report["bedmap1_spri"] = {
+                "frame_matches": n_spri,
+                "points_in_map_region": len(spri_gdf_map),
+            }
         else:
             print("    No SPRI entries in BEDMAP1")
+            report["bedmap1_spri"] = None
     else:
         print("    BEDMAP1 shapefile not found or no coordinates")
+        report["bedmap1_spri"] = None
 
     # Clip RIGGS to map region
     riggs_df_map = None
@@ -717,15 +860,17 @@ def main():
             & (riggs_df["y_ps"] <= flt_y.max() + margin)
         ]
         print(f"    {len(riggs_df_map)} RIGGS stations in map region")
+        if report.get("riggs") is not None:
+            report["riggs"]["stations_in_map_region"] = len(riggs_df_map)
 
-    # Generate figure
+    # -- Generate figure ---------------------------------------------------
     out_path = OUTPUT_BASE / f"F{flt}" / "validation" / f"F{flt}_validation.png"
     print("  Generating validation figure ...")
     make_validation_figure(merged, flt, out_path,
                            nav=nav, riggs_df=riggs_df_map,
                            spri_gdf=spri_gdf_map)
 
-    # Summary statistics
+    # -- Comparison statistics ---------------------------------------------
     good = merged[merged["echo_status"] == "good"]
 
     # ASTRA comparison (primary validation)
@@ -742,10 +887,14 @@ def main():
                 r = np.corrcoef(both_astra["h_ice_astra"].values,
                                 both_astra["h_ice_m"].values)[0, 1]
                 print(f"    Correlation r:   {r:.3f}")
+            report["astra"]["comparison"] = _comparison_stats(
+                both_astra["h_ice_m"].values, both_astra["h_ice_astra"].values)
 
     # Spatial comparisons
-    for ref_col, ref_name in [("riggs_ice", "RIGGS (Bentley 1984)"),
-                               ("spri_ice", "BEDMAP1 SPRI (same-source)")]:
+    for ref_col, ref_name, report_key in [
+        ("riggs_ice", "RIGGS (Bentley 1984)", "riggs"),
+        ("spri_ice", "BEDMAP1 SPRI (same-source)", "bedmap1_spri"),
+    ]:
         if ref_col in merged.columns:
             both = good[good[ref_col].notna() & good["h_ice_m"].notna()]
             if len(both) > 0:
@@ -755,8 +904,18 @@ def main():
                 print(f"    Std difference:  {np.std(diff):.0f} m")
                 print(f"    RMSE:            {np.sqrt(np.mean(diff**2)):.0f} m")
                 print(f"    Median abs diff: {np.median(np.abs(diff)):.0f} m")
+                if report.get(report_key) is not None:
+                    report[report_key]["comparison"] = _comparison_stats(
+                        both["h_ice_m"].values, both[ref_col].values)
 
-    print("\nDone.")
+    # -- Write JSON report -------------------------------------------------
+    json_path = OUTPUT_BASE / f"F{flt}" / "validation" / f"F{flt}_validation.json"
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(json_path, "w") as f:
+        json.dump(report, f, indent=2)
+    print(f"\n  Report \u2192 {json_path}")
+
+    print("Done.")
 
 
 if __name__ == "__main__":

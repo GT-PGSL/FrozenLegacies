@@ -31,7 +31,7 @@ from build_digit_templates import (
     TEXT_Y0_FRAC, TEXT_Y1_FRAC, TEXT_X0_FRAC, TEXT_X1_FRAC,
 )
 
-# ── Config ─────────────────────────────────────────────────────────────────
+# -- Config -----------------------------------------------------------------
 FLT = 125
 RAW_DIR = ROOT / f"Data/ascope/raw/{FLT}"
 OUT_DIR = ROOT / f"tools/LYRA/output/F{FLT}"
@@ -43,7 +43,7 @@ TMPL_PATH = ROOT / "tools/LYRA/digit_templates.npy"
 DEFAULT_TIFFS = ["7700", "7725", "8400", "8425"]
 
 
-# ── Load ground truth from frame index ─────────────────────────────────────
+# -- Load ground truth from frame index -------------------------------------
 def load_ground_truth():
     """Return dict: {tiff_id: {frame_idx: cbd_str}} from frame_index.csv."""
     gt = {}
@@ -77,7 +77,7 @@ def make_diag_figure(tiff_path, tiff_id, gt_cbds, templates):
     n_comp = len(complete)
     print(f"  {n_comp} complete frames")
 
-    # ── Figure layout: 3 columns per row ───────────────────────────────────
+    # -- Figure layout: 3 columns per row -----------------------------------
     fig, axes = plt.subplots(n_comp, 3, figsize=(16, 2.2 * n_comp))
     if n_comp == 1:
         axes = axes[np.newaxis, :]
@@ -90,7 +90,7 @@ def make_diag_figure(tiff_path, tiff_id, gt_cbds, templates):
         true_cbd = gt_cbds.get(fidx, "????")
         true_str = f"{FLT:03d}{true_cbd}"
 
-        # ── Raw text region crop ───────────────────────────────────────────
+        # -- Raw text region crop -------------------------------------------
         y0 = int(H * TEXT_Y0_FRAC)
         y1 = int(H * TEXT_Y1_FRAC)
         x0 = int(fw * TEXT_X0_FRAC)
@@ -102,7 +102,7 @@ def make_diag_figure(tiff_path, tiff_id, gt_cbds, templates):
         ax_raw.set_title(f"Fr {fidx} — true: {true_str}", fontsize=8)
         ax_raw.axis("off")
 
-        # ── Binary + blob boundaries ───────────────────────────────────────
+        # -- Binary + blob boundaries ---------------------------------------
         binary = get_binary_text(crop_u8, H, fw)
         blobs = find_digit_col_ranges(binary)
 
@@ -131,7 +131,7 @@ def make_diag_figure(tiff_path, tiff_id, gt_cbds, templates):
         ax_bin.set_title(f"{len(blobs)} blobs", fontsize=8)
         ax_bin.axis("off")
 
-        # ── NCC per digit ──────────────────────────────────────────────────
+        # -- NCC per digit --------------------------------------------------
         ax_ncc = axes[row, 2]
         ax_ncc.axis("off")
 
@@ -180,10 +180,10 @@ def make_diag_figure(tiff_path, tiff_id, gt_cbds, templates):
     out_path = OUT_DIR / f"diag_ocr_{tiff_id}.png"
     fig.savefig(out_path, dpi=150, bbox_inches="tight", facecolor="white")
     plt.close(fig)
-    print(f"  Saved → {out_path.relative_to(ROOT)}")
+    print(f"  Saved -> {out_path.relative_to(ROOT)}")
 
 
-# ── Main ───────────────────────────────────────────────────────────────────
+# -- Main -------------------------------------------------------------------
 if __name__ == "__main__":
     tiff_ids = sys.argv[1:] if len(sys.argv) > 1 else DEFAULT_TIFFS
 

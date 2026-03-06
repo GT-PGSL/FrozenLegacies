@@ -10,7 +10,7 @@ Ground truth source: user-confirmed for 40_0008400_0008424-reel_begin_end.tiff
 
 Recognition strategy (two-stage):
   Stage 1 — NCC matching: match each digit blob to the nearest template
-  Stage 2 — Sequential constraint: |CBD[n+1] − CBD[n]| = 1 always; use
+  Stage 2 — Sequential constraint: |CBD[n+1] - CBD[n]| = 1 always; use
              majority-vote anchor to correct any wrong NCC reads
 
 Outputs
@@ -41,14 +41,14 @@ OUT_DIR.mkdir(parents=True, exist_ok=True)
 sys.path.insert(0, str(ROOT / "tools/LYRA"))
 from lyra import detect_frames, _connected_components_1d, _gauss_smooth
 
-# ── Ground truth from user ──────────────────────────────────────────────────
+# -- Ground truth from user --------------------------------------------------
 FLIGHT = 125
 KNOWN_CBDS = {
     1: 458,  2: 459,  3: 460,  4: 461,  5: 462,  6: 463,
     7: 464,  8: 465,  9: 466, 10: 467, 11: 468, 12: 469,
 }
 
-# ── Constants for text region ───────────────────────────────────────────────
+# -- Constants for text region -----------------------------------------------
 TEXT_Y0_FRAC = 0.803    # top of CBD text row (fraction of frame height)
 TEXT_Y1_FRAC = 0.865    # bottom of CBD text row
 TEXT_X0_FRAC = 0.25     # left crop (fraction of frame width)
@@ -159,7 +159,7 @@ def extract_templates(img_norm, frames, H):
         blobs = adjust_blobs_to_7(blobs)
 
         print(f"  Frame {frame_idx} (CBD {cbd:04d}): '{full_str}'  "
-              f"{len(blobs)} blobs → match")
+              f"{len(blobs)} blobs -> match")
 
         for (s, e), digit_char in zip(blobs, full_str):
             pad = 4
@@ -250,7 +250,7 @@ def recognize_frame(frame_crop, H, fw, templates):
 
 def apply_sequential_constraint(frame_indices, raw_reads, flight=None):
     """
-    Use the physical constraint |CBD[n+1] − CBD[n]| = 1 to validate and
+    Use the physical constraint |CBD[n+1] - CBD[n]| = 1 to validate and
     correct NCC recognition results.
 
     Parameters
@@ -331,7 +331,7 @@ def apply_sequential_constraint(frame_indices, raw_reads, flight=None):
     return corrected, best_score
 
 
-# ── Main ────────────────────────────────────────────────────────────────────
+# -- Main --------------------------------------------------------------------
 if __name__ == "__main__":
     print(f"\nLoading {TIFF.name} ...")
     Image.MAX_IMAGE_PIXELS = None
@@ -343,14 +343,14 @@ if __name__ == "__main__":
     med_w    = float(np.median(widths))
     print(f"  {len(frames)} frames detected\n")
 
-    # ── Step 1: build templates ───────────────────────────────────────────
+    # -- Step 1: build templates -------------------------------------------
     print("Building digit templates from known frames ...")
     templates = extract_templates(img_norm, frames, H)
     np.save(TMPL, templates)
-    print(f"\n  Templates saved → {TMPL.relative_to(ROOT)}")
+    print(f"\n  Templates saved -> {TMPL.relative_to(ROOT)}")
     print(f"  Digits with templates: {sorted(templates.keys())}\n")
 
-    # ── Step 2: raw NCC recognition on all complete frames ────────────────
+    # -- Step 2: raw NCC recognition on all complete frames ----------------
     print("Stage 1 — NCC recognition (raw) ...")
     complete_frame_indices = []
     raw_reads_list         = []
@@ -364,7 +364,7 @@ if __name__ == "__main__":
             complete_frame_indices.append(i)
             raw_reads_list.append(recog)
 
-    # ── Step 3: sequential constraint correction ──────────────────────────
+    # -- Step 3: sequential constraint correction --------------------------
     print("Stage 2 — Sequential constraint correction ...")
     corrected_list, n_anchors = apply_sequential_constraint(
         complete_frame_indices, raw_reads_list
@@ -372,7 +372,7 @@ if __name__ == "__main__":
     print(f"  Anchor agreement: {n_anchors}/{len(complete_frame_indices)} "
           f"raw reads consistent with best-fit sequence\n")
 
-    # ── Step 4: report final results ──────────────────────────────────────
+    # -- Step 4: report final results --------------------------------------
     print(f"  {'Fr':>3}  {'Raw NCC':>10}  {'Corrected':>10}  "
           f"{'Expected':>10}  {'W':>5}  {'Type':>8}  Status")
     print("  " + "-" * 72)
@@ -392,11 +392,11 @@ if __name__ == "__main__":
         expected_cbd = KNOWN_CBDS.get(i)
         expected_str = f"{FLIGHT:03d}{expected_cbd:04d}" if expected_cbd else "?"
         correct      = (corr == expected_str) if expected_cbd else None
-        status       = "✓" if correct is True else ("✗" if correct is False else "—")
+        status       = "[OK]" if correct is True else ("[X]" if correct is False else "—")
         print(f"  {i:>3}  {str(raw):>10}  {str(corr):>10}  "
               f"{expected_str:>10}  {fw:>5}  {ptype:>8}  {status}")
 
-    # ── Step 5: final metadata summary ───────────────────────────────────
+    # -- Step 5: final metadata summary -----------------------------------
     print("\nFrame metadata summary (LYRA output):")
     print(f"  {'Fr':>3}  {'Type':>8}  {'CBD':>8}")
     print("  " + "-" * 25)
@@ -412,7 +412,7 @@ if __name__ == "__main__":
             cbd_str  = corr[3:] if corr and len(corr) >= 7 else "?"
             print(f"  {i:>3}  {ptype:>8}  {cbd_str:>8}")
 
-    # ── Step 6: template contact sheet figure ────────────────────────────
+    # -- Step 6: template contact sheet figure ----------------------------
     digits_sorted = sorted(templates.keys())
     nd   = len(digits_sorted)
     ncol = 5
@@ -442,5 +442,5 @@ if __name__ == "__main__":
     fig_path = OUT_DIR / "templates_validation.png"
     fig.savefig(fig_path, dpi=150, bbox_inches="tight", facecolor="white")
     plt.close(fig)
-    print(f"\n  Template figure → {fig_path.relative_to(ROOT)}")
+    print(f"\n  Template figure -> {fig_path.relative_to(ROOT)}")
     print("\nDone.")

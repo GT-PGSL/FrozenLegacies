@@ -3,10 +3,10 @@ calibrate.py — LYRA Phase 3: Per-frame calibration
 ========================================================
 For each complete frame in a TIFF, independently detects:
 
-  • Main bang column  (mb_x)      → X anchor: t = 0 µs
-  • Reference line row (y_ref_px) → Y anchor: power = −60 dB
-  • X grid lines                  → detected via argmax in below-baseline band
-  • Y grid lines                  → extrapolated from y_ref_px + k × y_spacing
+  • Main bang column  (mb_x)      -> X anchor: t = 0 µs
+  • Reference line row (y_ref_px) -> Y anchor: power = -60 dB
+  • X grid lines                  -> detected via argmax in below-baseline band
+  • Y grid lines                  -> extrapolated from y_ref_px + k × y_spacing
 
 Calibration values are NEVER assumed constant across frames.
 Each frame gets its own (mb_x, y_ref_px, x_spacing_px, y_spacing_px).
@@ -19,7 +19,7 @@ y_ref estimate.  Frames without guide picks fall back to the pure algorithm.
 Quality gate
 ------------
 After Pass 1, frames whose mb_power_dB deviates more than 8 dB below the
-TIFF-median are re-run without D_anchor (Priority A2 stripped → falls back to
+TIFF-median are re-run without D_anchor (Priority A2 stripped -> falls back to
 Priority B phase search).  This prevents a mis-detected main bang from
 corrupting the x-grid via the D_anchor offset.
 
@@ -44,11 +44,11 @@ Per-flight calibration CSV (updated incrementally):
 
 Per-frame diagnostic figure:
     tools/LYRA/output/F{FLT}/phase3/F{FLT}_{file_id}_cal.png
-      Red   dashed vertical   → main bang (t = 0 µs)
-      Cyan  dashed horizontal → reference line (−60 dB)
-      Gold  dashed horizontal → Y grid lines (extrapolated, every 10 dB)
-      Blue  dashed vertical   → X grid lines (detected, every 1.5 µs)
-      White dotted            → user guide picks (if provided)
+      Red   dashed vertical   -> main bang (t = 0 µs)
+      Cyan  dashed horizontal -> reference line (-60 dB)
+      Gold  dashed horizontal -> Y grid lines (extrapolated, every 10 dB)
+      Blue  dashed vertical   -> X grid lines (detected, every 1.5 µs)
+      White dotted            -> user guide picks (if provided)
 """
 
 from pathlib import Path
@@ -71,7 +71,7 @@ from lyra import (
     _gauss_smooth, ensure_canonical_name, resolve_tiff_arg, tiff_id,
 )
 
-# ── Resolve TIFF path ──────────────────────────────────────────────────────────
+# -- Resolve TIFF path ----------------------------------------------------------
 if len(sys.argv) > 1:
     TIFF = resolve_tiff_arg(sys.argv[1], ROOT)
 else:
@@ -97,7 +97,7 @@ CAL_CSV      = PHASE3_DIR / f"F{FLT}_cal.csv"
 PICKS_JSON   = PHASE1_DIR / f"F{FLT}_cal_picks.json"
 DERIVED_JSON = PHASE1_DIR / f"F{FLT}_cal_derived.json"
 
-# ── Load frame index ───────────────────────────────────────────────────────────
+# -- Load frame index -----------------------------------------------------------
 if not INDEX_CSV.exists():
     sys.exit(f"ERROR: frame index not found at {INDEX_CSV}\n"
              "Run phase 1 (detect_frames.py) first.")
@@ -114,7 +114,7 @@ print(f"  Flight : F{FLT}  |  tiff_id : {TIFF_ID}")
 print(f"  Frames in index: {len(tiff_rows)}  "
       f"(complete: {(tiff_rows.frame_type == 'complete').sum()})\n")
 
-# ── Load guidance picks (if available from pick_calibration.py) ───────────────
+# -- Load guidance picks (if available from pick_calibration.py) ---------------
 raw_picks:   dict = {}
 derived_cal: dict = {}
 
@@ -133,7 +133,7 @@ if not raw_picks:
     print("  [INFO] No guide picks file found.")
 print()
 
-# ── Measure x_spacing_px from guide picks if not already in derived_cal ───────
+# -- Measure x_spacing_px from guide picks if not already in derived_cal -------
 # derived_cal["x_spacing_px"] propagates (via _build_guides) to EVERY frame.
 # Without this, all frames use DEFAULT_CAL's 205.54 px (measured on F125), which
 # causes progressive drift on any TIFF with a different oscilloscope time base.
@@ -150,7 +150,7 @@ if not derived_cal.get("x_spacing_px") and raw_picks:
                   f"(DEFAULT_CAL was {_default_sp:.2f})")
             break
 
-# ── Compute tiff-level D_anchor ────────────────────────────────────────────────
+# -- Compute tiff-level D_anchor ------------------------------------------------
 # D_anchor = distance (px) from mb_x to the nearest major tick to the right.
 # The oscilloscope sweep is triggered from the radar transmit pulse, so all
 # waveform content is time-locked to the graticule — D is constant within a TIFF.
@@ -169,7 +169,7 @@ if raw_picks:
 if tiff_d_anchor is None:
     print("  D_anchor      : (none — no frame with both mb and x_grid picks)")
 
-# ── Tiff-level MB estimate ─────────────────────────────────────────────────────
+# -- Tiff-level MB estimate -----------------------------------------------------
 # Median MB position across guided frames with mb > 200 px (> 200 excludes
 # reel-begin artifacts where CRT hasn't settled; mb ~ 100–150 px in those frames).
 # Used as a soft guide for unguided frames in flights where DEFAULT_CAL's
@@ -208,7 +208,7 @@ if raw_picks:
         print(f"  MB estimate   : {tiff_mb_estimate:.0f} px  "
               f"(flight-wide median of {len(_all_mbs)} guided MB pick(s))")
 
-# ── Identify tiff-level anchor ─────────────────────────────────────────────────
+# -- Identify tiff-level anchor -------------------------------------------------
 # If any complete frame in this TIFF already has picks (e.g. collected by
 # pick_calibration.py with Q after frame 0), propagate only its REF (y_ref_px)
 # to frames without individual picks.  The REF (noise floor row) is stable
@@ -245,8 +245,8 @@ for _, anchor_row in tiff_rows.iterrows():
         break
 
 
-# ── Enforce minimum ref pick for y_ref calibration ─────────────────────────
-# The −60 dB reference row (y_ref_px) cannot be reliably auto-detected.
+# -- Enforce minimum ref pick for y_ref calibration -------------------------
+# The -60 dB reference row (y_ref_px) cannot be reliably auto-detected.
 # A user pick for at least one complete frame in THIS TIFF is required so
 # that y_ref_px propagates accurately to all unguided frames.
 # Without this, the pre-bang 75th-percentile fallback produces erratic
@@ -271,12 +271,12 @@ if not tiff_anchor:
     sys.exit(
         f"\nERROR: No reference-line pick found for TIFF {TIFF_ID} ({cbd_range}).\n"
         f"  {picks_info}\n\n"
-        f"  The −60 dB reference row (y_ref_px) cannot be reliably detected\n"
+        f"  The -60 dB reference row (y_ref_px) cannot be reliably detected\n"
         f"  without at least one user pick for the current TIFF.\n\n"
         f"  Fix:\n"
         f"    python tools/LYRA/pick_calibration.py {tiff_arg}\n\n"
         f"  In the picker, open any complete frame from {cbd_range}.\n"
-        f"  Press R to click the −60 dB reference line (noise floor baseline),\n"
+        f"  Press R to click the -60 dB reference line (noise floor baseline),\n"
         f"  then press Q to save and exit.\n\n"
         f"  Then re-run step 2:\n"
         f"    python tools/LYRA/calibrate.py {tiff_arg}\n"
@@ -284,14 +284,14 @@ if not tiff_anchor:
 
 
 def _build_guides(fkey: str) -> dict:
-    """Assemble guide dict: per-frame picks → tiff anchor ref → global defaults.
+    """Assemble guide dict: per-frame picks -> tiff anchor ref -> global defaults.
 
     MB (main bang column): use per-frame pick if available; otherwise let the
     no-guide algorithm run (global noise floor + leftmost peak).  The tiff
     anchor's mb is intentionally NOT propagated — mb position can vary across
     frames and an incorrect mb guide is worse than no guide at all.
 
-    REF (y_ref_px = −60 dB row): use per-frame pick, then tiff anchor, then
+    REF (y_ref_px = -60 dB row): use per-frame pick, then tiff anchor, then
     default.  The noise floor row is stable within a TIFF, so propagation is safe.
     """
     g: dict = {}
@@ -322,7 +322,7 @@ def _build_guides(fkey: str) -> dict:
     return g
 
 
-# ── Load TIFF image ────────────────────────────────────────────────────────────
+# -- Load TIFF image ------------------------------------------------------------
 print("Loading TIFF ...")
 Image.MAX_IMAGE_PIXELS = None
 img      = np.array(Image.open(TIFF), dtype=np.float32)
@@ -330,16 +330,16 @@ img_norm = (img - img.min()) / (img.max() - img.min() + 1e-9)
 H, W     = img_norm.shape
 print(f"  Image  : {W} × {H} px\n")
 
-# ── Pass 1: calibrate all frames ───────────────────────────────────────────────
-# Collect (frame_idx → data dict) for quality gate and figure generation.
+# -- Pass 1: calibrate all frames -----------------------------------------------
+# Collect (frame_idx -> data dict) for quality gate and figure generation.
 # Frames marked exclude=true in guide picks are flagged and skipped.
 
 cal_rows    = []
-_frame_data = {}   # frame_idx → dict(frame, cal, guides, cbd, fkey, file_id)
+_frame_data = {}   # frame_idx -> dict(frame, cal, guides, cbd, fkey, file_id)
 
 print(f"  {'Fr':>3}  {'CBD':>6}  {'mb_x':>6}  {'mb_dB':>7}  "
       f"{'y_ref':>6}  {'db/px':>7}  {'x_sp':>6}  {'Ygrid':>5}  Guide?")
-print("  " + "─" * 72)
+print("  " + "-" * 72)
 
 for _, row in tiff_rows.iterrows():
     frame_idx  = int(row["frame_idx"])
@@ -365,7 +365,7 @@ for _, row in tiff_rows.iterrows():
         stale_png = PHASE3_DIR / f"F{FLT}_{file_id}_cal.png"
         if stale_png.exists():
             stale_png.unlink()
-            print(f"       ↳ Deleted stale figure: {stale_png.name}")
+            print(f"        > Deleted stale figure: {stale_png.name}")
         # Write excluded row so step3 knows why this frame was skipped
         cal_rows.append(dict(
             flight        = FLT,
@@ -402,7 +402,7 @@ for _, row in tiff_rows.iterrows():
     hgrid_sp     = cal["hgrid_spacing"]
     hgrid_lines  = cal["hgrid_lines"]
     n_hgrid      = len(hgrid_lines)
-    has_guide    = "✓" if (guides.get("mb") or guides.get("ref")) else "—"
+    has_guide    = "[OK]" if (guides.get("mb") or guides.get("ref")) else "—"
 
     print(f"  {frame_idx:>3}  {str(cbd):>6}  {mb_x:>6}  {mb_power_dB:>+7.1f}  "
           f"{y_ref_px:>6.0f}  {db_per_px:>7.5f}  {x_spacing_px:>6.1f}  "
@@ -431,7 +431,7 @@ for _, row in tiff_rows.iterrows():
         exclude_reason = "",
     ))
 
-# ── Quality gate: re-run mb-outlier frames without D_anchor ───────────────────
+# -- Quality gate: re-run mb-outlier frames without D_anchor -------------------
 # If mb_power_dB is more than 8 dB below the TIFF median, the main bang was
 # likely mis-detected (T/R transient, noise peak, faint film).  Strip D_anchor
 # and re-run to let Priority B (phase search) find the graticule directly.
@@ -450,12 +450,12 @@ if cal_rows:
             for list_i, r in bad_idxs:
                 d  = _frame_data[r["frame_idx"]]
                 g2 = _build_guides(d["fkey"])
-                g2.pop("d_from_mb", None)   # strip D_anchor → Priority B fallback
+                g2.pop("d_from_mb", None)   # strip D_anchor -> Priority B fallback
                 cal2 = detect_frame_calibration(d["frame"], DEFAULT_CAL, guides=g2)
                 mb2  = cal2["mb_x"]
                 mbp2 = cal2["mb_power_dB"]
-                print(f"    {d['file_id']:15s}: mb_power {r['mb_power_dB']:+.1f} → {mbp2:+.1f} dB  "
-                      f"mb_x {r['mb_x']} → {mb2}")
+                print(f"    {d['file_id']:15s}: mb_power {r['mb_power_dB']:+.1f} -> {mbp2:+.1f} dB  "
+                      f"mb_x {r['mb_x']} -> {mb2}")
                 # Update stored calibration and cal_row
                 _frame_data[r["frame_idx"]]["cal"]    = cal2
                 _frame_data[r["frame_idx"]]["guides"] = g2
@@ -471,7 +471,7 @@ if cal_rows:
                     cal_source_y  = cal2["cal_source_y"],
                 ))
 
-# ── Generate figures (after quality gate, using final calibrations) ────────────
+# -- Generate figures (after quality gate, using final calibrations) ------------
 for frame_idx in sorted(_frame_data):
     d            = _frame_data[frame_idx]
     frame        = d["frame"]
@@ -498,9 +498,9 @@ for frame_idx in sorted(_frame_data):
         ax.axhline(yg, color="gold", lw=0.8, ls="--", alpha=0.7)
         db_labels[yg] = db_at_line
 
-    # Reference line (cyan thick) — y_ref_px = −60 dB
+    # Reference line (cyan thick) — y_ref_px = -60 dB
     ax.axhline(y_ref_px, color="cyan", lw=1.5, ls="--", alpha=0.9,
-               label=f"Ref −60 dB  y={y_ref_px:.0f}")
+               label=f"Ref -60 dB  y={y_ref_px:.0f}")
 
     # X grid lines (blue) — detected
     for xg in xgrid_lines:
@@ -529,7 +529,7 @@ for frame_idx in sorted(_frame_data):
     src_lbl = "guide+algo" if (guides.get("mb") or guides.get("ref")) else "algo only"
     ax.set_title(
         f"LYRA Step 2 — F{FLT} {file_id}  |  "
-        f"mb_x={mb_x}  y_ref={y_ref_px:.0f} (−60 dB)  "
+        f"mb_x={mb_x}  y_ref={y_ref_px:.0f} (-60 dB)  "
         f"db/px={db_per_px:.5f}  x_sp={x_spacing_px:.1f} px  [{src_lbl}]",
         fontsize=8, loc="left",
     )
@@ -551,7 +551,7 @@ for frame_idx in sorted(_frame_data):
     fig.savefig(fig_path, dpi=150, bbox_inches="tight", facecolor="white")
     plt.close(fig)
 
-# ── Update calibration CSV ─────────────────────────────────────────────────────
+# -- Update calibration CSV -----------------------------------------------------
 if cal_rows:
     new_df = pd.DataFrame(cal_rows)
     if CAL_CSV.exists():
@@ -561,8 +561,8 @@ if cal_rows:
     else:
         merged = new_df.astype(str)
     merged.to_csv(CAL_CSV, index=False)
-    print(f"\n  Calibration CSV → {CAL_CSV.relative_to(ROOT)}")
-    print(f"  Step 2 figures  → {STEP2_DIR.relative_to(ROOT)}/")
+    print(f"\n  Calibration CSV -> {CAL_CSV.relative_to(ROOT)}")
+    print(f"  Step 2 figures  -> {STEP2_DIR.relative_to(ROOT)}/")
     print(f"  Total cal rows  : {len(merged)}")
     n_guided = sum(1 for r in cal_rows if r["had_guide"])
     print(f"  Frames with guide: {n_guided}/{len(cal_rows)}")

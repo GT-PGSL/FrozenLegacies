@@ -18,7 +18,7 @@ Run from repo root, passing the TIFF path as an argument:
 
 Options:
     --method manual    Use human-verified CBDs from ASTRA CSV (ground truth)
-    --method segment   Structural 7-segment OCR (default, 89% raw → 100% corrected)
+    --method segment   Structural 7-segment OCR (default, 89% raw -> 100% corrected)
     --method ncc       NCC template matching (79% raw, requires digit_templates.npy)
     --override FR:CBD  Fix specific frames after OCR, e.g. --override 10:444 12:446
     --cbd-start N      Last-resort override: assign CBDs sequentially from N
@@ -35,8 +35,8 @@ TIFF-level figures (named by tiff_id, never overwrite another TIFF's outputs):
     tools/LYRA/output/F{FLT}/phase1/F{FLT}_{tiff_id}_ocr_diag.png  (OCR methods only)
 
 Per-frame outputs in later steps use:
-    CBD known   → F{FLT}_{tiff_id}_CBD{cbd}_{desc}.ext
-    Partial     → F{FLT}_{tiff_id}_fr{frame_idx:02d}_{desc}.ext
+    CBD known   -> F{FLT}_{tiff_id}_CBD{cbd}_{desc}.ext
+    Partial     -> F{FLT}_{tiff_id}_fr{frame_idx:02d}_{desc}.ext
 """
 
 from pathlib import Path
@@ -60,7 +60,7 @@ from build_digit_templates import (
 
 TMPL_PATH = ROOT / "tools/LYRA/digit_templates.npy"
 
-# ── Resolve TIFF path ──────────────────────────────────────────────────────────
+# -- Resolve TIFF path ----------------------------------------------------------
 import argparse
 _parser = argparse.ArgumentParser(add_help=False)
 _parser.add_argument("tiff", nargs="?", default=None)
@@ -72,8 +72,9 @@ _parser.add_argument("--method", choices=["manual", "segment", "ncc"],
                           "'segment' (structural 7-segment OCR, default), or "
                           "'ncc' (NCC template matching)")
 _parser.add_argument("--override", nargs="*", default=None, metavar="FR:CBD",
-                     help="Manually override specific frame CBDs after OCR, e.g. "
-                          "--override 10:444 11:445 12:446")
+                     help="Manually override specific frame CBDs, e.g. "
+                          "--override 10:444 11:445 12:446. "
+                          "Implies --method manual if ASTRA data exists.")
 _args, _ = _parser.parse_known_args()
 
 # Parse --override into dict {frame_idx: 4-digit CBD string}
@@ -112,7 +113,14 @@ PHASE1_DIR = OUT_DIR / "phase1"
 PHASE1_DIR.mkdir(parents=True, exist_ok=True)
 INDEX_CSV = PHASE1_DIR / f"F{FLT}_frame_index.csv"
 
-# ── Method-specific setup ─────────────────────────────────────────────────────
+# -- Method-specific setup -----------------------------------------------------
+# --override implies --method manual when ASTRA data exists
+if _args.override and _args.method == "segment":
+    ASTRA_CSV_CHECK = ROOT / f"Data/ascope/picks/{FLT}/{FLT}_CombinedASTRAPicks.csv"
+    if ASTRA_CSV_CHECK.exists():
+        _args.method = "manual"
+        print(f"  [info] --override provided; auto-selecting --method manual (ASTRA data found)")
+
 OCR_METHOD = _args.method
 templates  = None
 astra_cbds = None   # list of CBD ints for this TIFF (manual method only)
@@ -149,7 +157,7 @@ elif OCR_METHOD == "ncc":
 elif OCR_METHOD == "segment":
     from segment_ocr import recognize_frame_structural, SEGMENT_THRESHOLD
 
-# ── Load image ─────────────────────────────────────────────────────────────────
+# -- Load image -----------------------------------------------------------------
 print(f"\nLYRA Step 1 — {TIFF.name}")
 print(f"  Flight  : F{FLT}  |  tiff_id : {TIFF_ID}  |  OCR : {OCR_METHOD}")
 Image.MAX_IMAGE_PIXELS = None
@@ -158,7 +166,7 @@ img_norm = (img - img.min()) / (img.max() - img.min() + 1e-9)
 H, W     = img_norm.shape
 print(f"  Image   : {W} × {H} px")
 
-# ── Detect frames ──────────────────────────────────────────────────────────────
+# -- Detect frames --------------------------------------------------------------
 frames = detect_frames(img_norm)
 n      = len(frames)
 widths = [r - l for l, r in frames]
@@ -168,11 +176,11 @@ print(f"  Frames  : {n} detected  (median width {int(med_w)} px)\n")
 frame_types = ["complete" if (r - l) >= 0.75 * med_w else "partial"
                for l, r in frames]
 
-# ── Post-hoc merge of adjacent partial frames ─────────────────────────────────
+# -- Post-hoc merge of adjacent partial frames ---------------------------------
 # A mid-frame bright strip (splice, film damage) can split one physical A-scope
 # into two adjacent "partial" frames.  Merge them when:
 #   - both neighbours are classified "partial"
-#   - their combined span (left₁ to right₂) is 0.50–1.50 × median width
+#   - their combined span (left_1 to right_2) is 0.50–1.50 × median width
 # This is purely post-processing — does not change gap detection behaviour.
 merged = True
 while merged:
@@ -183,7 +191,7 @@ while merged:
             if 0.50 * med_w <= combined_w <= 1.50 * med_w:
                 new_frame = (frames[i][0], frames[i + 1][1])
                 print(f"  [merge] fr{i} ({frames[i][1]-frames[i][0]} px) + "
-                      f"fr{i+1} ({frames[i+1][1]-frames[i+1][0]} px) → "
+                      f"fr{i+1} ({frames[i+1][1]-frames[i+1][0]} px) -> "
                       f"merged ({combined_w} px)")
                 frames[i] = new_frame
                 del frames[i + 1]
@@ -195,11 +203,11 @@ while merged:
                 merged = True
                 break   # restart scan after mutation
 
-# ── Stage 1: CBD recognition on complete frames ────────────────────────────────
+# -- Stage 1: CBD recognition on complete frames --------------------------------
 complete_indices = [i for i, t in enumerate(frame_types) if t == "complete"]
 raw_reads_list   = []
-diag_blobs       = {}   # frame_idx → blob list (for OCR diagnostic figure)
-diag_confs       = {}   # frame_idx → per-digit Hamming distances
+diag_blobs       = {}   # frame_idx -> blob list (for OCR diagnostic figure)
+diag_confs       = {}   # frame_idx -> per-digit Hamming distances
 method_used      = "override"   # updated below if OCR or manual runs
 
 if CBD_START_OVERRIDE is not None:
@@ -248,13 +256,13 @@ else:
             recog, _ = recognize_frame(crop, H, fw, templates)
         raw_reads_list.append(recog)
 
-    # ── Stage 2: Sequential constraint correction ──────────────────────────────
+    # -- Stage 2: Sequential constraint correction ------------------------------
     corrected_list, n_anchors = apply_sequential_constraint(
         complete_indices, raw_reads_list, flight=FLT)
 
-# ── Build per-frame metadata ───────────────────────────────────────────────────
-# cbd_by_frame: frame_idx → 4-digit CBD string or None
-# ocr_raw_by_frame: frame_idx → raw OCR string (before sequential correction)
+# -- Build per-frame metadata ---------------------------------------------------
+# cbd_by_frame: frame_idx -> 4-digit CBD string or None
+# ocr_raw_by_frame: frame_idx -> raw OCR string (before sequential correction)
 cbd_by_frame     = {}
 ocr_raw_by_frame = {}
 corr_iter = iter(corrected_list)
@@ -269,10 +277,10 @@ for i, ftype in enumerate(frame_types):
         cbd_by_frame[i]     = None
         ocr_raw_by_frame[i] = ""
 
-# ── Apply per-frame overrides with sequential propagation ────────────────────
+# -- Apply per-frame overrides with sequential propagation --------------------
 # Overrides act as anchor points. Between anchors (and beyond them), CBDs are
 # filled sequentially with step +1 per complete frame.
-#   --override 3:434 10:444  →  fr1=432 fr2=433 fr3=434 ... fr9=440 fr10=444 fr11=445 ...
+#   --override 3:434 10:444  ->  fr1=432 fr2=433 fr3=434 ... fr9=440 fr10=444 fr11=445 ...
 if FRAME_OVERRIDES:
     # Validate and collect anchors as (position_in_complete_list, cbd_int)
     complete_order = [i for i in range(n) if frame_types[i] == "complete"]
@@ -286,7 +294,7 @@ if FRAME_OVERRIDES:
         if frame_types[fi] != "complete":
             # Force-promote: if user explicitly overrides a partial frame,
             # they are asserting it is a real A-scope frame.
-            print(f"  [override] promoting fr{fi} from partial → complete")
+            print(f"  [override] promoting fr{fi} from partial -> complete")
             frame_types[fi] = "complete"
             # Rebuild complete_order and pos_of after promotion
             complete_order = [i for i in range(n) if frame_types[i] == "complete"]
@@ -329,10 +337,10 @@ if FRAME_OVERRIDES:
             if fi in pos_of:
                 cbd_4 = cbd_by_frame[fi]
                 src = "anchor" if fi in {a[2] for a in anchors} else "propagated"
-                print(f"  Override ({src}): Fr {fi}  → CBD {cbd_4}")
+                print(f"  Override ({src}): Fr {fi}  -> CBD {cbd_4}")
         print()
 
-# ── Helper: frame identifier string (used for per-frame output filenames) ──────
+# -- Helper: frame identifier string (used for per-frame output filenames) ------
 def frame_file_id(frame_idx: int) -> str:
     """
     Return the canonical file-name stem fragment identifying this frame.
@@ -344,7 +352,7 @@ def frame_file_id(frame_idx: int) -> str:
         return f"CBD{cbd}"
     return f"{TIFF_ID}_fr{frame_idx:02d}"
 
-# ── Print metadata table ───────────────────────────────────────────────────────
+# -- Print metadata table -------------------------------------------------------
 raw_col = "Raw OCR" if method_used in ("segment", "ncc") else "Source"
 print(f"  {'Fr':>3}  {'Type':>8}  {'CBD':>8}  {'FileID':>14}  {raw_col:>10}")
 print("  " + "-" * 52)
@@ -364,7 +372,7 @@ else:
     print(f"\n  Sequential anchors: {n_anchors}/{len(complete_indices)} "
           f"raw reads consistent with best-fit sequence")
 
-# ── Update master frame index CSV ─────────────────────────────────────────────
+# -- Update master frame index CSV ---------------------------------------------
 new_rows = []
 for i in range(n):
     l, r  = frames[i]
@@ -399,10 +407,10 @@ merged = merged.sort_values(["_sort_tiff", "_sort_fr"]).drop(
     columns=["_sort_tiff", "_sort_fr"]).reset_index(drop=True)
 
 merged.to_csv(INDEX_CSV, index=False)
-print(f"\n  Frame index → {INDEX_CSV.relative_to(ROOT)}")
+print(f"\n  Frame index -> {INDEX_CSV.relative_to(ROOT)}")
 print(f"  Total rows in index: {len(merged)}")
 
-# ── Output 1: Contact sheet (named by tiff_id) ─────────────────────────────────
+# -- Output 1: Contact sheet (named by tiff_id) ---------------------------------
 ncols = 5
 nrows = int(np.ceil(n / ncols))
 
@@ -438,9 +446,9 @@ fig.tight_layout()
 cs_path = PHASE1_DIR / f"F{FLT}_{TIFF_ID}_contact.png"
 fig.savefig(cs_path, dpi=150, bbox_inches="tight", facecolor="white")
 plt.close(fig)
-print(f"\n  Contact sheet → {cs_path.relative_to(ROOT)}")
+print(f"\n  Contact sheet -> {cs_path.relative_to(ROOT)}")
 
-# ── Output 2: OCR diagnostic figure (only for segment/ncc methods) ───────────
+# -- Output 2: OCR diagnostic figure (only for segment/ncc methods) -----------
 if method_used in ("segment", "ncc") and len(complete_indices) > 0:
     import matplotlib.patches as mpatches
 
@@ -462,7 +470,7 @@ if method_used in ("segment", "ncc") and len(complete_indices) > 0:
         cor_s = next(corr_iter_d)
         cor_cbd = cor_s[3:] if (cor_s and len(cor_s) >= 7) else "?"
 
-        # ── Panel 1: Raw grayscale text crop ──────────────────────────────
+        # -- Panel 1: Raw grayscale text crop ------------------------------
         ax1 = axes_d[row, 0]
         # Extract just the text band (top ~4.5% of frame height)
         text_h = max(int(H * 0.045), 40)
@@ -471,7 +479,7 @@ if method_used in ("segment", "ncc") and len(complete_indices) > 0:
         ax1.set_ylabel(f"Fr {fi}", fontsize=7, rotation=0, labelpad=25, va="center")
         ax1.set_xticks([]); ax1.set_yticks([])
 
-        # ── Panel 2: Binary image with blob boundaries ────────────────────
+        # -- Panel 2: Binary image with blob boundaries --------------------
         ax2 = axes_d[row, 1]
         binary = get_binary_text(crop, H, fw)
         blobs  = diag_blobs.get(fi) if OCR_METHOD == "segment" else []
@@ -491,7 +499,7 @@ if method_used in ("segment", "ncc") and len(complete_indices) > 0:
             ax2.add_patch(rect)
         ax2.set_xticks([]); ax2.set_yticks([])
 
-        # ── Panel 3: Text summary ────────────────────────────────────────
+        # -- Panel 3: Text summary ----------------------------------------
         ax3 = axes_d[row, 2]
         ax3.set_xlim(0, 1); ax3.set_ylim(0, 1)
         ax3.axis("off")
@@ -501,7 +509,7 @@ if method_used in ("segment", "ncc") and len(complete_indices) > 0:
         raw_disp = raw_s if raw_s else "None"
         cor_disp = cor_cbd
 
-        # Show raw → corrected, highlighting mismatches
+        # Show raw -> corrected, highlighting mismatches
         lines = [f"Raw:  {raw_disp}", f"CBD:  {cor_disp}"]
         if confs:
             ham_str = " ".join(str(h) for h in confs)
@@ -525,7 +533,7 @@ if method_used in ("segment", "ncc") and len(complete_indices) > 0:
 
     method_label = OCR_METHOD
     if OCR_METHOD == "segment":
-        method_label = f"segment (θ={SEGMENT_THRESHOLD})"
+        method_label = f"segment (theta={SEGMENT_THRESHOLD})"
     fig_d.suptitle(
         f"LYRA Phase 1 OCR Diagnostic — F{FLT}  tiff_id {TIFF_ID}\n"
         f"Method: {method_label}  |  Anchors: {n_anchors}/{n_complete}",
@@ -535,6 +543,6 @@ if method_used in ("segment", "ncc") and len(complete_indices) > 0:
     diag_path = PHASE1_DIR / f"F{FLT}_{TIFF_ID}_ocr_diag.png"
     fig_d.savefig(diag_path, dpi=150, bbox_inches="tight", facecolor="white")
     plt.close(fig_d)
-    print(f"  OCR diagnostic → {diag_path.relative_to(ROOT)}")
+    print(f"  OCR diagnostic -> {diag_path.relative_to(ROOT)}")
 
 print("\nDone.")

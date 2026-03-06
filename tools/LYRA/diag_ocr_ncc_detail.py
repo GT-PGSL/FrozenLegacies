@@ -34,7 +34,7 @@ from build_digit_templates import (
     SCALE_X, SCALE_Y, THRESH_FRAC,
 )
 
-# ── Config ─────────────────────────────────────────────────────────────────
+# -- Config -----------------------------------------------------------------
 FLT = 125
 RAW_DIR = ROOT / f"Data/ascope/raw/{FLT}"
 OUT_DIR = ROOT / f"tools/LYRA/output/F{FLT}/step0"
@@ -65,7 +65,7 @@ def main():
     tiff_id = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_TIFF_ID
     frame_idx = int(sys.argv[2]) if len(sys.argv) > 2 else DEFAULT_FRAME
 
-    # ── Load ───────────────────────────────────────────────────────────────
+    # -- Load ---------------------------------------------------------------
     templates = np.load(TMPL_PATH, allow_pickle=True).item()
     gt = load_ground_truth()
     gt_cbds = gt.get(tiff_id, {})
@@ -89,24 +89,24 @@ def main():
     fw = crop_u8.shape[1]
     print(f"Frame {frame_idx}: cols {l}–{r}, width {fw} px, true CBD: {true_str}")
 
-    # ── Step 1: raw text crop ──────────────────────────────────────────────
+    # -- Step 1: raw text crop ----------------------------------------------
     y0 = int(H * TEXT_Y0_FRAC)
     y1 = int(H * TEXT_Y1_FRAC)
     x0 = int(fw * TEXT_X0_FRAC)
     x1 = int(fw * TEXT_X1_FRAC)
     raw_band = crop_u8[y0:y1, x0:x1]
 
-    # ── Step 2: upscale ───────────────────────────────────────────────────
+    # -- Step 2: upscale ---------------------------------------------------
     big = np.array(Image.fromarray(raw_band).resize(
         (raw_band.shape[1] * SCALE_X, raw_band.shape[0] * SCALE_Y),
         Image.LANCZOS))
     lo, hi = int(big.min()), int(big.max())
     thresh_val = lo + (hi - lo) * THRESH_FRAC
 
-    # ── Step 3: binarize ──────────────────────────────────────────────────
+    # -- Step 3: binarize --------------------------------------------------
     binary = get_binary_text(crop_u8, H, fw)
 
-    # ── Step 4: blob detection (with "4" merge fix) ───────────────────────
+    # -- Step 4: blob detection (with "4" merge fix) -----------------------
     blobs_raw = find_digit_col_ranges(binary)
     n_blobs_raw = len(blobs_raw)
 
@@ -124,11 +124,11 @@ def main():
         mid = (s + e) // 2
         blobs = blobs[:m] + [(s, mid), (mid+1, e)] + blobs[m+1:]
 
-    # ── Column projection for diagnostic ──────────────────────────────────
+    # -- Column projection for diagnostic ----------------------------------
     col_proj = binary.sum(axis=0)
     smoothed = _gauss_smooth(col_proj, sigma=3)
 
-    # ── NCC matching ──────────────────────────────────────────────────────
+    # -- NCC matching ------------------------------------------------------
     n_digits = len(blobs)
     queries = []
     results = []
@@ -150,7 +150,7 @@ def main():
 
     ocr_str = "".join(r[0] for r in results)
 
-    # ── Build figure ──────────────────────────────────────────────────────
+    # -- Build figure ------------------------------------------------------
     fig = plt.figure(figsize=(18, 22))
     fig.patch.set_facecolor("white")
 
@@ -158,24 +158,24 @@ def main():
     gs = fig.add_gridspec(5, 1, height_ratios=[1, 1.2, 1.5, 2.5, 2.5],
                           hspace=0.35)
 
-    # ── Row 1: raw crop ───────────────────────────────────────────────────
+    # -- Row 1: raw crop ---------------------------------------------------
     ax1 = fig.add_subplot(gs[0])
     ax1.imshow(raw_band, cmap="gray", aspect="auto")
     ax1.set_title(f"Step 1: Raw CBD text region (Frame {frame_idx}, "
                   f"true: {true_str})", fontsize=11)
     ax1.axis("off")
 
-    # ── Row 2: upscaled + threshold ───────────────────────────────────────
+    # -- Row 2: upscaled + threshold ---------------------------------------
     ax2 = fig.add_subplot(gs[1])
     ax2.imshow(big, cmap="gray", aspect="auto")
-    ax2.set_title(f"Step 2: Upscaled ({SCALE_X}×h, {SCALE_Y}×v) → "
+    ax2.set_title(f"Step 2: Upscaled ({SCALE_X}×h, {SCALE_Y}×v) -> "
                   f"{big.shape[1]}×{big.shape[0]} px | "
                   f"Threshold: {int(thresh_val)} "
                   f"({int(THRESH_FRAC*100)}% of [{lo},{hi}])",
                   fontsize=11)
     ax2.axis("off")
 
-    # ── Row 3: binary + blobs + column projection ─────────────────────────
+    # -- Row 3: binary + blobs + column projection -------------------------
     gs3 = gs[2].subgridspec(2, 1, height_ratios=[2, 1], hspace=0.15)
 
     ax3a = fig.add_subplot(gs3[0])
@@ -187,7 +187,7 @@ def main():
         ax3a.axvline(e, color=c, linewidth=1.0, alpha=0.8)
         ax3a.text((s + e) / 2, -10, str(idx), ha="center", fontsize=8,
                   color=c, fontweight="bold")
-    ax3a.set_title(f"Step 3–4: Binary + {n_blobs_raw} raw blobs → "
+    ax3a.set_title(f"Step 3–4: Binary + {n_blobs_raw} raw blobs -> "
                    f"{n_digits} after adjust", fontsize=11)
     ax3a.axis("off")
 
@@ -205,7 +205,7 @@ def main():
     ax3b.legend(fontsize=7, loc="upper right")
     ax3b.set_xlim(0, len(col_proj))
 
-    # ── Row 4: per-digit query images ─────────────────────────────────────
+    # -- Row 4: per-digit query images -------------------------------------
     gs4 = gs[3].subgridspec(1, n_digits, wspace=0.3)
     for pos in range(n_digits):
         ax = fig.add_subplot(gs4[pos])
@@ -222,7 +222,7 @@ def main():
     fig.text(0.01, 0.32, "Step 5a:\nQuery\ncrops",
              fontsize=10, fontweight="bold", va="center")
 
-    # ── Row 5: best-match templates + scores ──────────────────────────────
+    # -- Row 5: best-match templates + scores ------------------------------
     gs5 = gs[4].subgridspec(1, n_digits, wspace=0.3)
     for pos in range(n_digits):
         ax = fig.add_subplot(gs5[pos])
@@ -232,7 +232,7 @@ def main():
                       aspect="auto")
         sorted_s = sorted(scores.items(), key=lambda x: -x[1])
         score_text = "\n".join(
-            f"{'→' if d == true_d else ' '}{d}: {s:.3f}"
+            f"{'->' if d == true_d else ' '}{d}: {s:.3f}"
             for d, s in sorted_s[:5]
         )
         ax.set_title(f"Template '{best}'\nNCC={scores.get(best, 0):.3f}",
@@ -252,7 +252,7 @@ def main():
     out_path = OUT_DIR / f"diag_ocr_ncc_detail_{tiff_id}_fr{frame_idx}.png"
     fig.savefig(out_path, dpi=150, bbox_inches="tight", facecolor="white")
     plt.close(fig)
-    print(f"\nSaved → {out_path.relative_to(ROOT)}")
+    print(f"\nSaved -> {out_path.relative_to(ROOT)}")
     print(f"  True: {true_str}")
     print(f"  OCR:  {ocr_str}")
     for pos, (best, scores, true_d) in enumerate(results):

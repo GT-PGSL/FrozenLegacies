@@ -3,17 +3,17 @@ pick_calibration.py — LYRA interactive calibration picker (multi-frame)
 ========================================================================
 For each complete frame in a TIFF, collect guidance clicks for:
 
-  M — Main bang              (1 click  → red   vertical  line)
-  R — Reference −60 dB      (1 click  → cyan  horizontal line)
-  Y — Y-axis major grid line (2 clicks → lime  horizontal lines)
-  X — X-axis major grid line (2 clicks → orange vertical   lines)
+  M — Main bang              (1 click  -> red   vertical  line)
+  R — Reference -60 dB      (1 click  -> cyan  horizontal line)
+  Y — Y-axis major grid line (2 clicks -> lime  horizontal lines)
+  X — X-axis major grid line (2 clicks -> orange vertical   lines)
 
 These clicks are GUIDANCE ONLY — approximate hints ±tens of pixels are fine.
 The algorithm will snap to the true feature near each guide pick.
 
 Keyboard shortcuts (case-insensitive):
   M  — switch to Main Bang mode
-  R  — switch to Reference line −60 dB mode
+  R  — switch to Reference line -60 dB mode
   Y  — switch to Y-grid mode     (click two visible major lines)
   X  — switch to X-grid mode     (click two visible major lines)
   U  — undo last pick in the current mode
@@ -72,13 +72,13 @@ _PX_PER_DIV_X = 205.54
 MODE_COLORS = {"mb": "red", "ref": "cyan", "y_grid": "limegreen", "x_grid": "orange"}
 MODE_LABELS = {
     "mb":     "Main Bang  [M] — 1 click (red)",
-    "ref":    "Reference −60 dB  [R] — 1 click (cyan)",
+    "ref":    "Reference -60 dB  [R] — 1 click (cyan)",
     "y_grid": "Y-grid major line  [Y] — 2 clicks (lime)",
     "x_grid": "X-grid major line  [X] — 2 clicks (orange)",
 }
 
 
-# ── Argument parsing ──────────────────────────────────────────────────────────
+# -- Argument parsing ----------------------------------------------------------
 
 def parse_args():
     parser = argparse.ArgumentParser(description="LYRA interactive calibration picker")
@@ -93,7 +93,7 @@ def parse_args():
     return parser.parse_args()
 
 
-# ── TIFF queue logic ──────────────────────────────────────────────────────────
+# -- TIFF queue logic ----------------------------------------------------------
 
 def _row_fkey(row) -> str:
     cbd = str(getattr(row, "cbd", "") or "")
@@ -184,7 +184,7 @@ def build_tiff_queue(args) -> tuple[list[Path], int, Path]:
         return [tiff], flt, out_dir
 
 
-# ── Save + derive ─────────────────────────────────────────────────────────────
+# -- Save + derive -------------------------------------------------------------
 
 def save_picks_and_derive(all_picks: dict, flt: int, out_dir: Path):
     """Save raw picks JSON and derive spacing constants."""
@@ -252,7 +252,7 @@ def save_picks_and_derive(all_picks: dict, flt: int, out_dir: Path):
     return picks_json, derived_json, derived
 
 
-# ── Interactive picker for one TIFF ───────────────────────────────────────────
+# -- Interactive picker for one TIFF -------------------------------------------
 
 def pick_one_tiff(tiff_path: Path, flt: int, all_picks: dict,
                   tiff_num: int, total_tiffs: int, is_flight_mode: bool,
@@ -323,12 +323,12 @@ def pick_one_tiff(tiff_path: Path, flt: int, all_picks: dict,
         right_px = int(row.right_px)
         frame_w = right_px - left_px + 1
 
-        print(f"\n{'─'*60}")
+        print(f"\n{'-'*60}")
         frame_label = f"  [{frame_i+1}/{len(frame_list)}]  {fkey}"
         if is_flight_mode:
             frame_label = f"  TIFF {tiff_num}/{total_tiffs}  " + frame_label
         print(f"{frame_label}  cols {left_px}–{right_px}  (width {frame_w} px)")
-        print(f"  M=main bang  R=ref −60dB  Y=y-grid  X=x-grid  "
+        print(f"  M=main bang  R=ref -60dB  Y=y-grid  X=x-grid  "
               f"U=undo  N=next  B=back  S=skip  Q={'next TIFF' if is_flight_mode else 'quit'}")
 
         # Extract + display-stretch this frame
@@ -351,7 +351,7 @@ def pick_one_tiff(tiff_path: Path, flt: int, all_picks: dict,
             "drawn":  [],
         }
 
-        # ── Build figure ──────────────────────────────────────────────────
+        # -- Build figure --------------------------------------------------
         fig, ax = plt.subplots(figsize=(16, 8))
         fig.patch.set_facecolor("white")
 
@@ -410,7 +410,7 @@ def pick_one_tiff(tiff_path: Path, flt: int, all_picks: dict,
                 y = p["ref"]
                 st["drawn"] += [
                     ax.axhline(y, color="cyan", lw=2.0, ls="--", alpha=0.9),
-                    ax.text(10, y - 18, f"−60 dB  y={y}",
+                    ax.text(10, y - 18, f"-60 dB  y={y}",
                             color="cyan", fontsize=8, fontweight="bold"),
                 ]
 
@@ -434,7 +434,7 @@ def pick_one_tiff(tiff_path: Path, flt: int, all_picks: dict,
                 f"LYRA Calibration Picker — {title_prefix}TIFF {tid} — F{flt}  {fkey}  "
                 f"[{frame_i+1}/{len(frame_list)}]\n"
                 f"Gray dashed = default-cal prediction  |  "
-                f"M=main bang  R=ref−60dB  Y=y-grid  X=x-grid  "
+                f"M=main bang  R=ref-60dB  Y=y-grid  X=x-grid  "
                 f"U=undo  N=next  B=back  S=skip  {q_label}",
                 fontsize=8, loc="left",
             )
@@ -443,7 +443,7 @@ def pick_one_tiff(tiff_path: Path, flt: int, all_picks: dict,
             fig.canvas.draw_idle()
             fig.canvas.flush_events()
 
-        # ── Event handlers ────────────────────────────────────────────────
+        # -- Event handlers ------------------------------------------------
         def on_click(event):
             if event.inaxes != ax or event.button != 1:
                 return
@@ -490,7 +490,7 @@ def pick_one_tiff(tiff_path: Path, flt: int, all_picks: dict,
                 print(">> Mode: Main Bang  (click near the leftmost spike)")
             elif key == "r":
                 st["mode"] = "ref"
-                print(">> Mode: Reference line −60 dB  (click the bottom baseline)")
+                print(">> Mode: Reference line -60 dB  (click the bottom baseline)")
             elif key == "y":
                 st["mode"] = "y_grid"
                 p["y_grid"].clear()
@@ -546,7 +546,7 @@ def pick_one_tiff(tiff_path: Path, flt: int, all_picks: dict,
         _refresh()
         plt.show()
 
-        # ── Post-window: process action ───────────────────────────────────
+        # -- Post-window: process action -----------------------------------
         p = st["picks"]
 
         def _save_frame_picks(fkey, p):
@@ -593,7 +593,7 @@ def pick_one_tiff(tiff_path: Path, flt: int, all_picks: dict,
     return final_action
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+# -- Main ----------------------------------------------------------------------
 
 def main():
     args = parse_args()
@@ -622,7 +622,7 @@ def main():
 
         # Save after each TIFF (incremental — don't lose work)
         pj, dj, derived = save_picks_and_derive(all_picks, flt, out_dir)
-        print(f"  Picks saved → {pj.relative_to(ROOT)}")
+        print(f"  Picks saved -> {pj.relative_to(ROOT)}")
 
         if action == "quit":
             break
@@ -630,8 +630,8 @@ def main():
     # Final summary
     _, _, derived = save_picks_and_derive(all_picks, flt, out_dir)
     print(f"\nDone. Total frames with picks: {len(all_picks)}")
-    print(f"  x_spacing_px : {derived['x_spacing_px']:.2f} px  → {derived['us_per_px']:.6f} µs/px")
-    print(f"  y_spacing_px : {derived['y_spacing_px']:.2f} px  → {derived['db_per_px']:.6f} dB/px")
+    print(f"  x_spacing_px : {derived['x_spacing_px']:.2f} px  -> {derived['us_per_px']:.6f} µs/px")
+    print(f"  y_spacing_px : {derived['y_spacing_px']:.2f} px  -> {derived['db_per_px']:.6f} dB/px")
     print(f"  MB guides    : {len(derived['mb_guides'])}")
     print(f"  Ref guides   : {len(derived['ref_guides'])}")
 

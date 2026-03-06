@@ -11,15 +11,15 @@ Prototype mode (run standalone for training/evaluation):
     python tools/LYRA/segment_ocr.py [--diag TIFF_ID FRAME_IDX]
 
 Segment layout:
-     ─a─
+     -a-
     |   |
     f   b
     |   |
-     ─g─
+     -g-
     |   |
     e   c
     |   |
-     ─d─
+     -d-
 """
 
 from pathlib import Path
@@ -41,10 +41,10 @@ from build_digit_templates import (
     TMPL_W, TMPL_H,
 )
 
-# ── Production threshold (trained on F125, universal for Tek 465 CRT) ─────
+# -- Production threshold (trained on F125, universal for Tek 465 CRT) -----
 SEGMENT_THRESHOLD = 0.26
 
-# ── Prototype config (only used when run as __main__) ─────────────────────
+# -- Prototype config (only used when run as __main__) ---------------------
 FLT = 125
 RAW_DIR = ROOT / f"Data/ascope/raw/{FLT}"
 OUT_DIR = ROOT / f"tools/LYRA/output/F{FLT}/step0"
@@ -52,7 +52,7 @@ INDEX_CSV = ROOT / f"tools/LYRA/output/F{FLT}/phase1/F{FLT}_frame_index.csv"
 TRAIN_TIFFS = ["7700", "7725", "8400", "8425"]
 TEST_TIFFS = ["8300"]
 
-# ── 7-segment truth table ─────────────────────────────────────────────────
+# -- 7-segment truth table -------------------------------------------------
 #                   a  b  c  d  e  f  g
 SEGMENT_TABLE = {
     "0": np.array([1, 1, 1, 1, 1, 1, 0]),
@@ -68,7 +68,7 @@ SEGMENT_TABLE = {
 }
 SEG_NAMES = ["a", "b", "c", "d", "e", "f", "g"]
 
-# ── Zone definitions (fractions of DIGIT bounding box, NOT full image) ─────
+# -- Zone definitions (fractions of DIGIT bounding box, NOT full image) -----
 # Each zone: (row_start_frac, row_end_frac, col_start_frac, col_end_frac)
 # These are relative to the auto-detected ink bounding box within each blob.
 ZONES = {
@@ -150,7 +150,7 @@ def measure_segment_densities(digit_img, orig_aspect=None):
     Zones are placed relative to the auto-detected digit bounding box,
     so they adapt to where the actual content sits in the image.
     digit_img: (TMPL_H, TMPL_W) float32 binary image (1=ink, 0=bg).
-    orig_aspect: blob_width / median_blob_width (< 0.55 → narrow digit).
+    orig_aspect: blob_width / median_blob_width (< 0.55 -> narrow digit).
     Returns (densities_dict, zone_rects, bbox).
     """
     rects, bbox = get_zone_rects(digit_img, orig_aspect)
@@ -169,7 +169,7 @@ def classify_digit(densities, threshold):
     threshold: float (global) or dict {seg_name: float} (per-segment).
 
     Hybrid approach:
-    1. Threshold densities → binary segment vector
+    1. Threshold densities -> binary segment vector
     2. Compute Hamming distance to each digit's truth pattern
     3. Among candidates with minimum Hamming distance, use MSE as tiebreaker
 
@@ -228,9 +228,9 @@ def crop_and_resize_digit(binary, s, e, med_blob_w, pad=4):
     return query, orig_aspect
 
 
-# ═══════════════════════════════════════════════════════════════════════════
+# ===========================================================================
 # Production API — imported by detect_frames.py
-# ═══════════════════════════════════════════════════════════════════════════
+# ===========================================================================
 
 def recognize_frame_structural(frame_crop, H, fw,
                                threshold=SEGMENT_THRESHOLD):
@@ -291,9 +291,9 @@ def recognize_frame_structural(frame_crop, H, fw,
     return recognized, blobs, confidences
 
 
-# ═══════════════════════════════════════════════════════════════════════════
+# ===========================================================================
 # Prototype / training functions (used when run as __main__)
-# ═══════════════════════════════════════════════════════════════════════════
+# ===========================================================================
 
 def extract_digit_blobs(tiff_path, tiff_id, gt_cbds):
     """
@@ -372,7 +372,7 @@ def find_tiff(tiff_id):
     return matches[0] if matches else None
 
 
-# ── Diagnostic figure for one frame ───────────────────────────────────────
+# -- Diagnostic figure for one frame ---------------------------------------
 def make_frame_diagnostic(tiff_path, tiff_id, frame_idx, gt_cbds, threshold):
     """
     Detailed diagnostic for one frame showing the structural matching
@@ -398,7 +398,7 @@ def make_frame_diagnostic(tiff_path, tiff_id, frame_idx, gt_cbds, threshold):
     blob_widths = [e - s for s, e in blobs]
     med_blob_w = float(np.median(blob_widths)) if blob_widths else 1.0
 
-    # ── Figure: 4 rows × n_digits columns ─────────────────────────────────
+    # -- Figure: 4 rows × n_digits columns ---------------------------------
     # Row 1: digit image with zone rectangles overlaid
     # Row 2: density bar chart per segment
     # Row 3: segment vector (lit/unlit) vs truth
@@ -431,7 +431,7 @@ def make_frame_diagnostic(tiff_path, tiff_id, frame_idx, gt_cbds, threshold):
         ocr_str += pred
         ok = pred == true_d
 
-        # ── Row 1: digit image + zone overlays ────────────────────────────
+        # -- Row 1: digit image + zone overlays ----------------------------
         ax = axes[0, col]
         ax.imshow(query, cmap="gray", vmin=0, vmax=1, aspect="auto")
         # Show bounding box
@@ -456,21 +456,21 @@ def make_frame_diagnostic(tiff_path, tiff_id, frame_idx, gt_cbds, threshold):
         ax.set_title(f"Pos {col}, true='{true_d}'", fontsize=9)
         ax.axis("off")
 
-        # ── Row 2: density bar chart ──────────────────────────────────────
+        # -- Row 2: density bar chart --------------------------------------
         ax = axes[1, col]
         bars = [densities[s] for s in SEG_NAMES]
         bar_colors = [seg_colors[s] for s in SEG_NAMES]
         ax.bar(SEG_NAMES, bars, color=bar_colors, alpha=0.7, edgecolor="k",
                linewidth=0.5)
         ax.axhline(threshold, color="red", linewidth=1.5, linestyle="--",
-                   label=f"θ={threshold:.2f}")
+                   label=f"theta={threshold:.2f}")
         ax.set_ylim(0, 1)
         ax.set_ylabel("density", fontsize=7)
         ax.tick_params(labelsize=7)
         ax.legend(fontsize=6, loc="upper right")
         ax.set_title("Segment densities", fontsize=8)
 
-        # ── Row 3: segment vector vs truth ────────────────────────────────
+        # -- Row 3: segment vector vs truth --------------------------------
         ax = axes[2, col]
         truth_vec = SEGMENT_TABLE.get(true_d, np.zeros(7))
         x = np.arange(7)
@@ -491,7 +491,7 @@ def make_frame_diagnostic(tiff_path, tiff_id, frame_idx, gt_cbds, threshold):
                         color="red", fontweight="bold")
         ax.set_title("Segments: detected vs truth", fontsize=8)
 
-        # ── Row 4: classification result ──────────────────────────────────
+        # -- Row 4: classification result ----------------------------------
         ax = axes[3, col]
         ax.axis("off")
         result_text = (
@@ -520,11 +520,11 @@ def make_frame_diagnostic(tiff_path, tiff_id, frame_idx, gt_cbds, threshold):
     out_path = OUT_DIR / f"diag_segment_{tiff_id}_fr{frame_idx}.png"
     fig.savefig(out_path, dpi=150, bbox_inches="tight", facecolor="white")
     plt.close(fig)
-    print(f"  Diagnostic saved → {out_path.relative_to(ROOT)}")
+    print(f"  Diagnostic saved -> {out_path.relative_to(ROOT)}")
     return ocr_str
 
 
-# ── Per-segment threshold learning ────────────────────────────────────────
+# -- Per-segment threshold learning ----------------------------------------
 def learn_per_segment_thresholds(all_digits):
     """
     Learn optimal threshold for each segment independently.
@@ -622,8 +622,8 @@ def sweep_threshold(all_digits):
             best_acc_global = acc
             best_th_global = th
 
-    print(f"\n  Global best: θ={best_th_global:.2f} → {best_acc_global:.1%}")
-    print(f"  Per-segment:  → {acc_perseg:.1%}")
+    print(f"\n  Global best: theta={best_th_global:.2f} -> {best_acc_global:.1%}")
+    print(f"  Per-segment:  -> {acc_perseg:.1%}")
 
     if acc_perseg >= best_acc_global:
         print("  Using per-segment thresholds")
@@ -633,7 +633,7 @@ def sweep_threshold(all_digits):
         return best_th_global, best_th_global, best_acc_global
 
 
-# ── Confusion analysis ────────────────────────────────────────────────────
+# -- Confusion analysis ----------------------------------------------------
 def confusion_analysis(all_digits, threshold):
     """Print per-digit accuracy and common confusions."""
     from collections import Counter
@@ -669,7 +669,7 @@ def confusion_analysis(all_digits, threshold):
         c = digit_correct[digit]
         t = digit_counts[digit]
         acc = c / t if t > 0 else 0
-        marker = "" if acc == 1.0 else " ← ERRORS"
+        marker = "" if acc == 1.0 else " <- ERRORS"
         print(f"  {digit:>5}  {c:>7}  {t:>5}  {acc:>6.1%}{marker}")
 
     total_correct = sum(digit_correct.values())
@@ -691,7 +691,7 @@ def confusion_analysis(all_digits, threshold):
     return confusions
 
 
-# ── Test evaluation with sequential constraint ──────────────────────────
+# -- Test evaluation with sequential constraint --------------------------
 def recognize_tiff_structural(tiff_path, tiff_id, gt_cbds, threshold):
     """
     Run structural matching on all complete frames of a TIFF.
@@ -771,7 +771,7 @@ def evaluate_test_tiff(tiff_id, threshold):
     frame_results = recognize_tiff_structural(
         tiff_path, tiff_id, gt_cbds, threshold)
 
-    # ── Raw accuracy ─────────────────────────────────────────────────────
+    # -- Raw accuracy -----------------------------------------------------
     print(f"\n  Raw structural matching results:")
     print(f"  {'Fr':>3}  {'Raw OCR':>10}  {'True':>10}  {'Match':>6}")
     print("  " + "-" * 40)
@@ -819,7 +819,7 @@ def evaluate_test_tiff(tiff_id, threshold):
     print(f"  Raw frame accuracy:  {correct_frames}/{total_frames} "
           f"= {raw_frame_acc:.1%}")
 
-    # ── Sequential constraint ────────────────────────────────────────────
+    # -- Sequential constraint --------------------------------------------
     print(f"\n  Applying sequential constraint (flight={FLT}) ...")
     corrected, n_anchors = apply_sequential_constraint(
         frame_indices, raw_reads, flight=FLT)
@@ -881,7 +881,7 @@ def evaluate_test_tiff(tiff_id, threshold):
     print(f"    Frame accuracy:  {corrected_frames}/{total_frames_corr} "
           f"= {corr_frame_acc:.1%}")
 
-    # ── Summary ──────────────────────────────────────────────────────────
+    # -- Summary ----------------------------------------------------------
     print(f"\n  SUMMARY for TIFF {tiff_id}:")
     print(f"    Raw:       {raw_digit_acc:.1%} digit, "
           f"{raw_frame_acc:.1%} frame")
@@ -908,7 +908,7 @@ def evaluate_test_tiff(tiff_id, threshold):
     }
 
 
-# ── Main ───────────────────────────────────────────────────────────────────
+# -- Main -------------------------------------------------------------------
 if __name__ == "__main__":
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     gt = load_ground_truth()
@@ -922,7 +922,7 @@ if __name__ == "__main__":
             diag_tiff = sys.argv[idx + 1]
             diag_frame = int(sys.argv[idx + 2])
 
-    # ── Step 1: extract all digit blobs from training TIFFs ───────────────
+    # -- Step 1: extract all digit blobs from training TIFFs ---------------
     print("Extracting digit blobs from training TIFFs ...")
     all_digits = []
     for tid in TRAIN_TIFFS:
@@ -941,13 +941,13 @@ if __name__ == "__main__":
 
     print(f"\n  Total training digits: {len(all_digits)}")
 
-    # ── Step 2: learn thresholds ────────────────────────────────────────────
+    # -- Step 2: learn thresholds --------------------------------------------
     best_th_global, best_th, best_acc = sweep_threshold(all_digits)
 
-    # ── Step 3: confusion analysis at best threshold ──────────────────────
+    # -- Step 3: confusion analysis at best threshold ----------------------
     confusions = confusion_analysis(all_digits, best_th)
 
-    # ── Step 4: diagnostic figure for one frame ───────────────────────────
+    # -- Step 4: diagnostic figure for one frame ---------------------------
     print(f"\nGenerating diagnostic for TIFF {diag_tiff} frame {diag_frame}...")
     tiff_path = find_tiff(diag_tiff)
     gt_cbds = gt.get(diag_tiff, {})
@@ -956,7 +956,7 @@ if __name__ == "__main__":
 
     print(f"\nTraining accuracy: {best_acc:.1%}")
 
-    # ── Step 5: TEST on held-out TIFF(s) ─────────────────────────────────
+    # -- Step 5: TEST on held-out TIFF(s) ---------------------------------
     print(f"\n{'#'*70}")
     print(f"  TESTING ON HELD-OUT TIFF(s): {TEST_TIFFS}")
     print(f"{'#'*70}")
@@ -967,7 +967,7 @@ if __name__ == "__main__":
         if result:
             test_results.append(result)
 
-    # ── Final comparison ─────────────────────────────────────────────────
+    # -- Final comparison -------------------------------------------------
     if test_results:
         print(f"\n{'='*70}")
         print(f"  FINAL RESULTS")
@@ -976,9 +976,9 @@ if __name__ == "__main__":
         print(f"    Raw digit accuracy: {best_acc:.1%}")
         print(f"\n  Test (TIFFs {', '.join(TEST_TIFFS)}):")
         for r in test_results:
-            print(f"    TIFF {r['tiff_id']}: raw={r['raw_digit_acc']:.1%} → "
+            print(f"    TIFF {r['tiff_id']}: raw={r['raw_digit_acc']:.1%} -> "
                   f"corrected={r['corr_digit_acc']:.1%} "
-                  f"(frame: {r['raw_frame_acc']:.1%} → "
+                  f"(frame: {r['raw_frame_acc']:.1%} -> "
                   f"{r['corr_frame_acc']:.1%})")
             print(f"      Anchors: {r['n_anchors']}/{r['n_frames']}")
 

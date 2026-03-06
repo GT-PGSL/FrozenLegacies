@@ -12,7 +12,7 @@ import matplotlib.patches as mpatches
 from PIL import Image
 from scipy.ndimage import gaussian_filter1d
 
-# ── Frame / calibration constants (from phase1 + phase3 CSVs) ─────────────────
+# -- Frame / calibration constants (from phase1 + phase3 CSVs) -----------------
 TIFF_PATH  = "Data/ascope/raw/125/40_0008400_0008424-reel_begin_end.tiff"
 FRAME_LEFT  = 1054          # phase1: CBD 0458 left_px
 FRAME_RIGHT = 4061          # phase1: CBD 0458 right_px
@@ -25,23 +25,23 @@ Y_LO        = 300           # DEFAULT_CAL y_disp_lo
 Y_HI        = 1700          # DEFAULT_CAL y_disp_hi
 GRAT_HALF   = 5             # graticule mask half-width (px)
 
-# URSA-inspired threshold (raw uint8; CRT trace ≈ 0-20; film grain ≈ 30-80)
-RAW_TRACE_THRESHOLD = 80    # columns with col_min_raw < this → "has real signal"
+# URSA-inspired threshold (raw uint8; CRT trace ~ 0-20; film grain ~ 30-80)
+RAW_TRACE_THRESHOLD = 80    # columns with col_min_raw < this -> "has real signal"
 
-# ── Load TIFF (raw uint8 AND normalised float) ────────────────────────────────
+# -- Load TIFF (raw uint8 AND normalised float) --------------------------------
 Image.MAX_IMAGE_PIXELS = None
 img_pil = Image.open(TIFF_PATH)
 img_raw  = np.array(img_pil, dtype=np.uint8)          # raw pixel values
 img_f    = img_raw.astype(np.float32)
 img_norm = (img_f - img_f.min()) / (img_f.max() - img_f.min() + 1e-9)
 
-# ── Extract frame slices ──────────────────────────────────────────────────────
+# -- Extract frame slices ------------------------------------------------------
 frame_raw  = img_raw [Y_LO:Y_HI, FRAME_LEFT:FRAME_RIGHT+1]   # uint8 band
 frame_norm = img_norm[Y_LO:Y_HI, FRAME_LEFT:FRAME_RIGHT+1]   # float [0,1] band
 bH, W = frame_raw.shape
 print(f"Frame size: {W} × {bH} px  (raw dtype: {frame_raw.dtype})")
 
-# ── Build graticule-row exclusion mask ────────────────────────────────────────
+# -- Build graticule-row exclusion mask ----------------------------------------
 y_sp_px = 10.0 / DB_PER_PX          # px per 10-dB major division
 n_lo = int(np.floor((Y_LO - Y_REF_PX) / y_sp_px)) - 1
 n_hi = int(np.ceil ((Y_HI - Y_REF_PX) / y_sp_px)) + 1
@@ -55,15 +55,15 @@ for n in range(n_lo, n_hi + 1):
 non_grat_rows = [r for r in range(bH) if r not in grat_rows]
 print(f"Graticule rows excluded from min check: {len(grat_rows)} / {bH}")
 
-# ── Per-column raw minimum (excluding graticule rows) ────────────────────────
+# -- Per-column raw minimum (excluding graticule rows) ------------------------
 frame_raw_ng = frame_raw[non_grat_rows, :]   # shape (n_non_grat, W)
 col_raw_min  = frame_raw_ng.min(axis=0)      # (W,)  uint8
 
-# ── Signal column classification ──────────────────────────────────────────────
+# -- Signal column classification ----------------------------------------------
 signal_mask = col_raw_min < RAW_TRACE_THRESHOLD   # True where CRT trace present
 x = np.arange(W)
 
-# ── Longest contiguous run of signal columns (URSA trim_signal_trace idea) ───
+# -- Longest contiguous run of signal columns (URSA trim_signal_trace idea) ---
 def longest_run(mask):
     """Return (start, end) inclusive of the longest True run in mask."""
     in_run, best_start, best_len = False, 0, 0
@@ -89,16 +89,16 @@ print(f"MB_X (frame-relative): {MB_X}")
 print(f"Signal start TWT: {sig_start * US_PER_PX:.3f} µs")
 print(f"Signal end   TWT: {sig_end   * US_PER_PX:.3f} µs")
 
-# ── Build new trace using signal mask ─────────────────────────────────────────
+# -- Build new trace using signal mask -----------------------------------------
 # Graticule-masked normalised band (for argmin)
 band_gm = frame_norm.copy()
 for r in grat_rows:
     band_gm[r, :] = 1.0
 
-# Argmin on graticule-masked band → raw trace positions (band-relative rows)
+# Argmin on graticule-masked band -> raw trace positions (band-relative rows)
 trace_raw = np.argmin(band_gm, axis=0).astype(float)   # band-relative
 
-# Apply signal mask: outside longest-run → NF reference row
+# Apply signal mask: outside longest-run -> NF reference row
 nf_row_rel = Y_REF_PX - Y_LO                           # band-relative NF row
 trace_masked = trace_raw.copy()
 outside_signal = np.ones(W, dtype=bool)
@@ -113,11 +113,11 @@ trace_raw_s    = gaussian_filter1d(trace_raw,    sigma=5.0)
 trace_abs_new = trace_masked_s + Y_LO
 trace_abs_old = trace_raw_s    + Y_LO
 
-# ── Time / power axes ─────────────────────────────────────────────────────────
+# -- Time / power axes ---------------------------------------------------------
 t_axis  = x * US_PER_PX                              # µs
 col_min_power = -(col_raw_min.astype(float) / 255.0 * 60)  # crude visual only
 
-# ── Plot ──────────────────────────────────────────────────────────────────────
+# -- Plot ----------------------------------------------------------------------
 fig, axes = plt.subplots(3, 1, figsize=(14, 12),
                          gridspec_kw={"height_ratios": [3, 1.2, 3]})
 fig.suptitle("F125 CBD 0458 — URSA-inspired signal-extent detection", fontsize=13)

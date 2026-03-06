@@ -16,23 +16,23 @@ For each A-scope frame in a TIFF this module:
   7.  Computes waveform shape metrics:
         peakiness        = peak_linear / mean_linear  (within +10 dB window)
         asymmetry        = trailing_width_10 / leading_width_10
-        trailing_tail_us = trail_5 − trail_10  (subsurface scattering length)
-        leading_rise_us  = peak_twt − lead_10  (onset steepness)
+        trailing_tail_us = trail_5 - trail_10  (subsurface scattering length)
+        leading_rise_us  = peak_twt - lead_10  (onset steepness)
   8.  Returns a flat pandas DataFrame (one row per frame)
 
 Grid calibration (validated vs Neal 1977 Fig 1.3a, CBD 0465, F125):
-  X-axis : 1.5 µs / major division  (205.54 px/major; 4 minor ticks → 0.3 µs/minor)
+  X-axis : 1.5 µs / major division  (205.54 px/major; 4 minor ticks -> 0.3 µs/minor)
   Y-axis : 10 dB  / major division  (205.0  px/major)
-  Noise floor reference : y = 1507 px  → −60 dB
+  Noise floor reference : y = 1507 px  -> -60 dB
 
 WARNING: Do NOT use ASTRA surface_us / bed_us for geometry — those times are
          2× too large (ASTRA assumed 3.0 µs/major; correct value is 1.5 µs/major).
          Use only LYRA-derived travel times.
 
 Physical interpretation of waveform metrics:
-  High peakiness + low asymmetry + short trailing_tail  → specular / liquid water
-  Low peak power + long trailing_tail                   → saline / frozen marine ice
-  Broad symmetric echo, moderate peakiness              → rough / incoherent bed
+  High peakiness + low asymmetry + short trailing_tail  -> specular / liquid water
+  Low peak power + long trailing_tail                   -> saline / frozen marine ice
+  Broad symmetric echo, moderate peakiness              -> rough / incoherent bed
 """
 from __future__ import annotations
 
@@ -46,7 +46,7 @@ import pandas as pd
 from PIL import Image
 
 
-# ── TIFF canonical naming utility ─────────────────────────────────────────────
+# -- TIFF canonical naming utility ---------------------------------------------
 
 _CANONICAL_RE = re.compile(r'^\d+_\d+_\d+-reel_begin_end\.tiff$', re.IGNORECASE)
 
@@ -55,8 +55,8 @@ def _parse_rename_log(log_path: Path) -> dict[str, str]:
     """Parse a LYRA rename log. Returns {current_name: canonical_name} mapping.
 
     The log format has blocks like:
-        Old: 43_0008375_0008399-reel_begin_end.tiff   ← canonical (target)
-        New: F141-C0038_C0047.tiff                    ← current (on-disk) name
+        Old: 43_0008375_0008399-reel_begin_end.tiff   <- canonical (target)
+        New: F141-C0038_C0047.tiff                    <- current (on-disk) name
     """
     mapping: dict[str, str] = {}
     old_name = new_name = None
@@ -111,14 +111,14 @@ def ensure_canonical_name(tiff_path: Path) -> Path:
     tiff_path.rename(new_path)
     print(f"  [ensure_canonical_name] Renamed:\n"
           f"      {tiff_path.name}\n"
-          f"    → {new_path.name}")
+          f"    -> {new_path.name}")
     return new_path
 
 
 def tiff_id(tiff_path: Path) -> str:
     """Extract 4-digit TIFF start number from canonical filename.
 
-    E.g. ``40_0008400_0008424-reel_begin_end.tiff`` → ``"8400"``.
+    E.g. ``40_0008400_0008424-reel_begin_end.tiff`` -> ``"8400"``.
     """
     for part in tiff_path.stem.split("_"):
         if part.isdigit() and len(part) >= 5:
@@ -135,12 +135,12 @@ def resolve_tiff_arg(arg: str, root: Path) -> Path:
 
     Returns the resolved absolute Path.  Raises SystemExit on no match.
     """
-    # If it has a file extension → treat as a literal path
+    # If it has a file extension -> treat as a literal path
     p = Path(arg)
     if p.suffix:
         return root / p if not p.is_absolute() else p
 
-    # FLT/TIFF_ID shorthand: "125/8700" → search in Data/ascope/raw/125/
+    # FLT/TIFF_ID shorthand: "125/8700" -> search in Data/ascope/raw/125/
     if "/" in arg:
         parts = arg.strip("/").split("/")
         if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
@@ -162,11 +162,11 @@ def resolve_tiff_arg(arg: str, root: Path) -> Path:
         # Otherwise treat as a regular relative path
         return root / p if not p.is_absolute() else p
 
-    # If it exists as a relative path from root → use it
+    # If it exists as a relative path from root -> use it
     if (root / p).exists():
         return root / p
 
-    # Bare numeric ID without flight → reject with helpful message
+    # Bare numeric ID without flight -> reject with helpful message
     if arg.isdigit():
         raise SystemExit(
             f"ERROR: Please use FLT/TIFF_ID format, e.g. 125/{arg}\n"
@@ -178,7 +178,7 @@ def resolve_tiff_arg(arg: str, root: Path) -> Path:
     )
 
 
-# ── Pure-numpy replacements (no scipy dependency) ─────────────────────────────
+# -- Pure-numpy replacements (no scipy dependency) -----------------------------
 
 def _connected_components_1d(mask: np.ndarray) -> list[tuple[int, int]]:
     """Return (start, end) index pairs for each run of True in a boolean mask."""
@@ -242,19 +242,19 @@ def _find_peaks_numpy(arr: np.ndarray,
 
     return candidates
 
-# ── Physical constants ─────────────────────────────────────────────────────────
+# -- Physical constants ---------------------------------------------------------
 C_AIR_M_PER_US = 300.0   # m / µs  (speed of light in air)
 C_ICE_M_PER_US = 168.0   # m / µs  (Millar 1981; Neal 1977 uses 169)
 
-# ── Default grid calibration ───────────────────────────────────────────────────
+# -- Default grid calibration ---------------------------------------------------
 # Measured algorithmically from raw TIFFs; validated vs Neal 1977 Fig 1.3a.
 _X_SPACING_PX = 205.54   # pixels per major X division (measured from TIFF)
 _Y_SPACING_PX = 205.0    # pixels per major Y division (user confirmed)
 
 DEFAULT_CAL: dict = dict(
-    us_per_px     = 1.5 / _X_SPACING_PX,   # 0.007299 µs/px   ← VALIDATED
+    us_per_px     = 1.5 / _X_SPACING_PX,   # 0.007299 µs/px   <- VALIDATED
     db_per_px     = 10.0 / _Y_SPACING_PX,  # 0.048780 dB/px
-    y_ref_px      = 1507,    # row of −60 dB reference line
+    y_ref_px      = 1507,    # row of -60 dB reference line
     y_ref_db      = -60.0,   # dB at the reference row
     y_disp_lo     = 300,     # top of usable display band (row index; lower = higher on image)
     y_disp_hi     = 1700,    # bottom of usable display band
@@ -264,11 +264,11 @@ DEFAULT_CAL: dict = dict(
     peak_min_prom_dB = 5.0,  # minimum peak prominence above noise floor for detection (dB)
     peak_min_dist_px = 80,   # minimum inter-peak distance (pixels)
     mb_skip_us    = 2.0,     # skip this many µs after main bang before searching for echoes
-    min_bed_gap_us = 2.0,    # minimum surface→bed TWT gap (µs); ~168 m minimum ice thickness
+    min_bed_gap_us = 1.5,    # minimum surface->bed TWT gap (µs); ~126 m minimum ice thickness
     max_walk_us   = 17.0,    # rightward envelope-walk limit (µs from MB); covers all RIS depths
     graticule_mask_half_px = 5,  # ±px to suppress around each major graticule line
     signal_binary_thresh  = 0.30, # normalized pixel threshold for dark-pixel binary mask.
-                                  # CRT trace ≈ 0.0–0.15; background ≈ 0.55–0.65.
+                                  # CRT trace ~ 0.0–0.15; background ~ 0.55–0.65.
     signal_density_sigma  = 30,   # Gaussian sigma for smoothing per-column dark-pixel count.
     signal_density_thresh = 50,   # smoothed dark-pixel count threshold for signal detection.
                                   # Used as the CAP in the adaptive threshold formula:
@@ -279,24 +279,24 @@ DEFAULT_CAL: dict = dict(
     signal_density_frac   = 0.25, # fraction of peak column density used for adaptive threshold.
     signal_grat_half      = 8,    # ±px to exclude around graticule rows in signal detection
                                   # (wider than graticule_mask_half_px to avoid dark-line leakage).
-    surface_window_us   = 8.0,   # surface search window end (µs from MB); covers altitude ≤1200 m
+    surface_window_us   = 8.0,   # surface search window end (µs from MB); covers altitude <=1200 m
     min_surface_lead_dB = 15.0,  # if strongest surface cand. > first by this, promote it
     quiet_gap_lead_us   = 1.0,   # µs after surface echo before checking for quiet gap
     quiet_gap_dB        = 12.0,  # trace must return within this many dB of NF in the gap
                                  # before a bed candidate is accepted.  Rejects surface-echo
                                  # trailing oscillations (which are continuous, never return
                                  # to NF); passes genuine thin-ice beds (surface echo decays
-                                 # to NF within ≤1 µs of the surface peak, then quiet gap).
-                                 # Not applied when gap < 1 µs wide (very thin ice, ≤84 m).
-    min_bed_width_us    = 0.3,   # minimum bed echo width (µs) at NF + min_bed_width_dB.
-                                 # Rejects very narrow film artifacts / spikes (< 0.2 µs).
-                                 # Real bed echoes: ≥ 0.45 µs even for narrow returns
-                                 # (F125 TIFF 7700 CBD0817: 0.45 µs at 10 dB threshold).
+                                 # to NF within <=1 µs of the surface peak, then quiet gap).
+                                 # Not applied when gap < 1 µs wide (very thin ice, <=84 m).
+    min_bed_width_us    = 0.2,   # minimum bed echo width (µs) at NF + min_bed_width_dB.
+                                 # Rejects very narrow film artifacts / spikes (< 0.15 µs).
+                                 # Thin-ice bed echoes can be as narrow as 0.25 µs (F126);
+                                 # thick-ice bed echoes >= 0.45 µs (F125 TIFF 7700 CBD0817).
     min_bed_width_dB    = 10.0,  # dB above NF used for the width measurement.
 )
 
 
-# ── Data classes ───────────────────────────────────────────────────────────────
+# -- Data classes ---------------------------------------------------------------
 
 @dataclass
 class EchoResult:
@@ -311,7 +311,7 @@ class EchoResult:
     # Envelope at +10 dB above noise floor
     lead_10_us:  float = np.nan   # leading edge TWT (µs from MB)
     trail_10_us: float = np.nan   # trailing edge TWT (µs from MB)
-    width_10_us: float = np.nan   # width = trail_10 − lead_10
+    width_10_us: float = np.nan   # width = trail_10 - lead_10
 
     # Envelope at +5 dB above noise floor (wider, captures subsurface tail)
     lead_5_us:   float = np.nan
@@ -319,10 +319,10 @@ class EchoResult:
     width_5_us:  float = np.nan
 
     # Derived shape metrics
-    leading_rise_us:  float = np.nan  # peak_twt − lead_10  (onset steepness; lower → more specular)
-    trailing_tail_us: float = np.nan  # trail_5 − trail_10  (subsurface scattering tail length)
+    leading_rise_us:  float = np.nan  # peak_twt - lead_10  (onset steepness; lower -> more specular)
+    trailing_tail_us: float = np.nan  # trail_5 - trail_10  (subsurface scattering tail length)
     peakiness:        float = np.nan  # peak_linear / mean_linear within +10 dB window (>1 = peaked)
-    asymmetry:        float = np.nan  # (peak_twt − lead_10) / (trail_10 − peak_twt) (>1 = trailing-heavy)
+    asymmetry:        float = np.nan  # (peak_twt - lead_10) / (trail_10 - peak_twt) (>1 = trailing-heavy)
 
 
 @dataclass
@@ -341,29 +341,29 @@ class LyraFrame:
     quality:          str  = "ok"  # "ok" | "no_surface" | "no_bed" | "failed"
 
 
-# ── Unit conversions ───────────────────────────────────────────────────────────
+# -- Unit conversions -----------------------------------------------------------
 
 def px_to_db(y, cal: dict):
-    """Row pixel → power (dB). Lower y (higher on image) = higher power."""
+    """Row pixel -> power (dB). Lower y (higher on image) = higher power."""
     return cal["y_ref_db"] + (cal["y_ref_px"] - y) * cal["db_per_px"]
 
 
 def db_to_px(db: float, cal: dict) -> float:
-    """Power (dB) → row pixel."""
+    """Power (dB) -> row pixel."""
     return cal["y_ref_px"] - (db - cal["y_ref_db"]) / cal["db_per_px"]
 
 
 def px_to_us(x, mb_x: int, cal: dict):
-    """Column pixel (frame-relative) → TWT (µs from main bang)."""
+    """Column pixel (frame-relative) -> TWT (µs from main bang)."""
     return (x - mb_x) * cal["us_per_px"]
 
 
 def us_to_px(us: float, mb_x: int, cal: dict) -> int:
-    """TWT (µs from main bang) → column pixel (frame-relative)."""
+    """TWT (µs from main bang) -> column pixel (frame-relative)."""
     return int(round(mb_x + us / cal["us_per_px"]))
 
 
-# ── Gaussian smoothing ─────────────────────────────────────────────────────────
+# -- Gaussian smoothing ---------------------------------------------------------
 
 def _gauss_smooth(arr: np.ndarray, sigma: float) -> np.ndarray:
     r = int(4 * sigma + 0.5)
@@ -383,7 +383,7 @@ def _running_median(arr: np.ndarray, window: int = 11) -> np.ndarray:
     return out
 
 
-# ── Frame boundary detection ───────────────────────────────────────────────────
+# -- Frame boundary detection ---------------------------------------------------
 
 def detect_frames(img_norm: np.ndarray,
                   band_frac: tuple = (0.20, 0.80),
@@ -399,9 +399,9 @@ def detect_frames(img_norm: np.ndarray,
     Ports the working approach from extract_noise_floor_ursa_frames.py:
       1. Compute column means in central band (20%–80% of height)
       2. Gaussian smooth
-      3. Normalize to [0, 1]           ← CRITICAL: do NOT threshold raw values
-      4. Threshold normalized at 0.90 → gap mask
-      5. Find gap CENTERS (mean col of each run ≥ min_gap_px wide)
+      3. Normalize to [0, 1]           <- CRITICAL: do NOT threshold raw values
+      4. Threshold normalized at 0.90 -> gap mask
+      5. Find gap CENTERS (mean col of each run >= min_gap_px wide)
       6. Frames = intervals between gap centers, with buffer_px inward
 
     Parameters
@@ -456,8 +456,8 @@ def detect_frames(img_norm: np.ndarray,
     # spurious "partial" frame at the beginning.
     #
     # The bimodal cut is applied only when the drop is dramatic (> 50 %) and
-    # enough gaps remain (≥ 3) to form a sensible frame sequence.  After the
-    # bimodal cut the hard cap max_gaps = expected_frames − 1 still applies as
+    # enough gaps remain (>= 3) to form a sensible frame sequence.  After the
+    # bimodal cut the hard cap max_gaps = expected_frames - 1 still applies as
     # a safety upper bound, so the old behaviour is preserved for TIFFs where
     # gap widths are all similar (no dramatic drop).
     gap_info.sort(key=lambda t: -t[0])   # widest first
@@ -481,11 +481,11 @@ def detect_frames(img_norm: np.ndarray,
             if max_discard < 0.20 * min_kept:
                 print(f"  [detect_frames] bimodal gap cut: keeping {best_cut} wide gaps "
                       f"(drop {best_ratio:.0%} at rank {best_cut}: "
-                      f"{gap_info[best_cut-1][0]}→{gap_info[best_cut][0]} px)")
+                      f"{gap_info[best_cut-1][0]}->{gap_info[best_cut][0]} px)")
                 gap_info = gap_info[:best_cut]
             else:
                 print(f"  [detect_frames] bimodal cut skipped: discarded gaps too large "
-                      f"({max_discard} px ≥ 20% of {min_kept} px)")
+                      f"({max_discard} px >= 20% of {min_kept} px)")
 
     max_gaps = expected_frames - 1
     if len(gap_info) > max_gaps:
@@ -507,7 +507,7 @@ def detect_frames(img_norm: np.ndarray,
         if right - left > min_frame_px:
             frames.append((max(0, left), min(W - 1, right)))
 
-    # ── Post-process: iteratively split oversized frames ──────────────────────
+    # -- Post-process: iteratively split oversized frames ----------------------
     # If a separator was missed (e.g. faint-trace frame nearly as bright as the
     # border), one entry may span 2+ physical A-scopes.  Find the brightest
     # column in the middle region and split there.  Repeat until all frames are
@@ -544,7 +544,7 @@ def detect_frames(img_norm: np.ndarray,
     return frames
 
 
-# ── Signal extent detection ────────────────────────────────────────────────────
+# -- Signal extent detection ----------------------------------------------------
 
 def detect_signal_extent(frame: np.ndarray,
                          cal: dict) -> tuple[int, int]:
@@ -562,11 +562,11 @@ def detect_signal_extent(frame: np.ndarray,
        to isolate dark pixels (CRT trace + some film grain).
     2. Exclude graticule rows (±signal_grat_half px around each 10-dB major
        grid line) so that horizontal grid lines do not inflate the count.
-    3. Sum the dark-pixel count per column and smooth with a Gaussian (σ = signal_density_sigma).
+    3. Sum the dark-pixel count per column and smooth with a Gaussian (sigma = signal_density_sigma).
     4. Adaptive threshold: max(floor, min(cap, fraction × peak_density)).
-       Bright frames (peak ~200) → cap = 50 (same as original fixed threshold).
-       Faint frames (peak ~40) → floor = 12 (above film-grain noise ~5-6 px/col).
-    5. Signal columns are those where the smoothed count ≥ adaptive threshold.
+       Bright frames (peak ~200) -> cap = 50 (same as original fixed threshold).
+       Faint frames (peak ~40) -> floor = 12 (above film-grain noise ~5-6 px/col).
+    5. Signal columns are those where the smoothed count >= adaptive threshold.
     6. Return the first and last such column.
 
     Parameters
@@ -585,11 +585,11 @@ def detect_signal_extent(frame: np.ndarray,
     band = frame[y_lo:y_hi, :]
     bH, W = band.shape
 
-    # ── Binary: dark pixels below threshold ──────────────────────────────────
+    # -- Binary: dark pixels below threshold ----------------------------------
     binary_thresh = cal.get("signal_binary_thresh", 0.30)
     binary = (band < binary_thresh).astype(np.uint8)
 
-    # ── Exclude graticule rows ───────────────────────────────────────────────
+    # -- Exclude graticule rows -----------------------------------------------
     grat_half = cal.get("signal_grat_half", 8)
     y_sp_px   = 10.0 / cal["db_per_px"]
     n_lo = int(np.floor((y_lo - cal["y_ref_px"]) / y_sp_px)) - 1
@@ -602,36 +602,36 @@ def detect_signal_extent(frame: np.ndarray,
             r1 = min(bH, gl_rel + grat_half + 1)
             binary[r0:r1, :] = 0
 
-    # ── Per-column dark-pixel count, smoothed ────────────────────────────────
+    # -- Per-column dark-pixel count, smoothed --------------------------------
     col_count  = binary.sum(axis=0).astype(float)
     sigma      = cal.get("signal_density_sigma", 30)
     col_smooth = _gauss_smooth(col_count, sigma)
 
-    # ── Adaptive threshold ─────────────────────────────────────────────────
+    # -- Adaptive threshold -------------------------------------------------
     # Fixed threshold (50) works for bright frames but excludes real echo
     # columns in faint CRT traces (e.g. F127 CBD0440: mean 18.5 dark px/col).
     # Adaptive formula: max(floor, min(cap, fraction × peak_density)).
-    # For bright frames (peak ~200): cap=50 reached → identical to original.
-    # For faint frames (peak ~40): floor=12 reached → catches real signal.
-    # Film grain noise ≈ 5-6 dark px/col; floor=12 stays safely above this.
+    # For bright frames (peak ~200): cap=50 reached -> identical to original.
+    # For faint frames (peak ~40): floor=12 reached -> catches real signal.
+    # Film grain noise ~ 5-6 dark px/col; floor=12 stays safely above this.
     cap      = cal.get("signal_density_thresh", 50)
     floor    = cal.get("signal_density_floor",  12)
     fraction = cal.get("signal_density_frac",   0.25)
     peak_density   = float(np.max(col_smooth)) if len(col_smooth) > 0 else 0.0
     density_thresh = max(floor, min(cap, fraction * peak_density))
 
-    # ── Signal extent: first/last column above threshold ─────────────────────
+    # -- Signal extent: first/last column above threshold ---------------------
     above = col_smooth >= density_thresh
     signal_cols = np.where(above)[0]
 
     if len(signal_cols) == 0:
-        # Fallback: no signal detected → treat entire frame as signal
+        # Fallback: no signal detected -> treat entire frame as signal
         return 0, W - 1
 
     return int(signal_cols[0]), int(signal_cols[-1])
 
 
-# ── Trace extraction ───────────────────────────────────────────────────────────
+# -- Trace extraction -----------------------------------------------------------
 
 def extract_trace(frame: np.ndarray,
                   cal: dict,
@@ -644,7 +644,7 @@ def extract_trace(frame: np.ndarray,
     oscilloscope display band, then applies Gaussian smoothing.
 
     The A-scope trace appears as a dark line on a lighter background in the
-    scanned TIFF (CRT phosphor → film → scan inversion).
+    scanned TIFF (CRT phosphor -> film -> scan inversion).
 
     Parameters
     ----------
@@ -658,21 +658,21 @@ def extract_trace(frame: np.ndarray,
         2. Pre-filter: replace the T/R ringing region
            [0, mb_x + mb_skip_px] and frame edges (±20 px) with the noise
            floor row so the coarse trajectory is not biased by ringing.
-        3. Apply a coarse Gaussian smooth (σ=30) to the pre-filtered trace
+        3. Apply a coarse Gaussian smooth (sigma=30) to the pre-filtered trace
            to obtain a stable "expected" row position for every column.
         4. Constrained argmin: at each column, restrict the search band to
-           [coarse − 250, coarse + 250].  Wide enough for deep-ice bed
+           [coarse - 250, coarse + 250].  Wide enough for deep-ice bed
            echoes (~500 px above NF) while rejecting gross outliers.
         5. Running median (window=11) on the constrained trace to reject
            sporadic film artifacts (1–5 columns of dark pixels at y=500–800
            that produce phantom dips ~30 dB above NF in the post-echo
            region).  Real echoes span hundreds of columns and are preserved.
-        6. Apply fine Gaussian smooth (σ=5) to the median-filtered result
-           → trace_y_s used for envelope walking.
+        6. Apply fine Gaussian smooth (sigma=5) to the median-filtered result
+           -> trace_y_s used for envelope walking.
 
         Why it works: film grain creates isolated 1–3 px dark hits; real
-        echoes are 50–500 px wide.  The coarse smooth (σ=30) is largely
-        unaffected by sparse grain hits (their total weight ≪ 1) but
+        echoes are 50–500 px wide.  The coarse smooth (sigma=30) is largely
+        unaffected by sparse grain hits (their total weight << 1) but
         accurately tracks the broad echo envelope.  The ±250 px search
         window is wide enough to capture both shallow and deep-ice echoes.
         The median filter then rejects any remaining sporadic artifacts
@@ -693,14 +693,14 @@ def extract_trace(frame: np.ndarray,
     band   = frame[y_lo:y_hi, :]
     bH     = band.shape[0]
 
-    # ── Graticule masking ──────────────────────────────────────────────────────
+    # -- Graticule masking ------------------------------------------------------
     # Major graticule lines (10 dB horizontal rules) are printed with dense ink
     # and appear DARKER than the CRT echo trace in the globally-normalised TIFF.
     # Without masking, argmin picks a graticule line instead of the signal peak,
-    # producing a systematic ~200 px (≈10 dB) power underestimation.
+    # producing a systematic ~200 px (~10 dB) power underestimation.
     #
     # Fix: set ±graticule_mask_half_px around every known major grid row to 1.0
-    # (white → never selected by argmin).  Grid positions are computed exactly
+    # (white -> never selected by argmin).  Grid positions are computed exactly
     # from step-2 calibration (y_ref_px, db_per_px); the formula is
     # flight-independent and adapts to F125 / F127 / F141 automatically.
     mask_half = cal.get("graticule_mask_half_px", 3)
@@ -714,10 +714,10 @@ def extract_trace(frame: np.ndarray,
         if 0 <= gl_rel < bH:
             r0 = max(0, gl_rel - mask_half)
             r1 = min(bH, gl_rel + mask_half + 1)
-            band_gm[r0:r1, :] = 1.0               # white → never picked by argmin
+            band_gm[r0:r1, :] = 1.0               # white -> never picked by argmin
 
     if robust and mb_x is not None:
-        # ── Robust trace extraction — signal-extent–based masking ────────────
+        # -- Robust trace extraction — signal-extent–based masking ------------
         #
         # Root cause of spurious peaks: outside the CRT sweep region (before
         # signal start, after signal end), direct argmin picks random dark
@@ -736,7 +736,7 @@ def extract_trace(frame: np.ndarray,
         mb_skip_px = max(1, int(cal.get("mb_skip_us", 2.0) / cal["us_per_px"]))
         tr_end     = min(W, mb_x + mb_skip_px)
 
-        # ── Pass 1: unconstrained argmin ─────────────────────────────────────
+        # -- Pass 1: unconstrained argmin -------------------------------------
         trace_raw = np.argmin(band,    axis=0).astype(float) + y_lo  # no grat mask
         trace_gm  = np.argmin(band_gm, axis=0).astype(float) + y_lo  # grat masked
 
@@ -749,16 +749,23 @@ def extract_trace(frame: np.ndarray,
         pre_mb_end   = min(mb_x, sig_end + 1)
         if pre_mb_start < pre_mb_end:
             trace_pass1[pre_mb_start:pre_mb_end] = trace_raw[pre_mb_start:pre_mb_end]
-        # T/R ringing zone → NF
+        # T/R ringing zone -> NF
         trace_pass1[mb_x:tr_end] = nf_row
 
-        # ── Constrained argmin (±250 px from coarse smooth) ──────────────────
+        # -- Constrained argmin (±250 px from coarse guide) -----------------
         # Single pass with ±250 px constraint.  Wide enough to reach deep-ice
         # bed echoes (~500 px above NF) while rejecting gross outliers
         # (film grain far from the CRT trace trajectory).
+        #
+        # Coarse guide: running median (window=61) instead of Gaussian sigma=30.
+        # Gaussian dampens sharp echo peaks by ~600 px (kernel ±120 px averages
+        # the narrow peak into surrounding NF), pushing the search window away
+        # from the true peak.  Median preserves sharp peaks (the peak IS the
+        # majority value in its neighborhood) while still rejecting isolated
+        # grain artifacts spanning <=30 columns.
         max_jump = 250
         trace_y  = trace_pass1.copy()
-        coarse   = _gauss_smooth(trace_y, sigma=30.0)
+        coarse   = _running_median(trace_y, window=61)
         for col in range(sig_start, sig_end + 1):
             expected_row = coarse[col] - y_lo  # band-relative
             lo_row = max(0,  int(expected_row - max_jump))
@@ -771,7 +778,7 @@ def extract_trace(frame: np.ndarray,
             trace_y[pre_mb_start:pre_mb_end] = trace_raw[pre_mb_start:pre_mb_end]
         trace_y[mb_x:tr_end] = nf_row
 
-        # ── Median filter + fine smooth for envelope walking ─────────────────
+        # -- Median filter + fine smooth for envelope walking -----------------
         # The constrained trace may have sporadic film artifacts (1–5 columns
         # where dark pixels at y=500–800 land within the ±250 band, producing
         # phantom dips ~30 dB above NF).  These artifacts don't affect peak
@@ -779,13 +786,13 @@ def extract_trace(frame: np.ndarray,
         # the smooth trace used for envelope walking — a single phantom dip
         # resets the consecutive-below-NF count, extending the trailing edge.
         #
-        # Running median (window=11) rejects artifacts spanning ≤5 columns
+        # Running median (window=11) rejects artifacts spanning <=5 columns
         # while preserving real echoes (span hundreds of columns).
         trace_constrained = trace_y.copy()
         trace_mf = _running_median(trace_constrained, window=11)
         trace_y_s = _gauss_smooth(trace_mf, sigma=5.0)
 
-        # ── Artifact detection data ────────────────────────────────────────
+        # -- Artifact detection data ----------------------------------------
         # Store per-column difference (in pixels) between the constrained
         # trace and the median-filtered trace.  Positive values indicate
         # that the median filter removed a downward artifact (constrained
@@ -802,11 +809,9 @@ def extract_trace(frame: np.ndarray,
         )
 
         # Return the UNCONSTRAINED pass-1 trace as trace_y for peak power
-        # reading.  The constrained argmin cannot reach sharp echo peaks
-        # (coarse σ=30 dampens a surface peak by ~600 px, exceeding the
-        # ±250 px search window).  The unconstrained argmin correctly tracks
-        # the CRT trace at echo peaks; grain contamination in flat regions
-        # does not matter because peak power is only read at detected peaks.
+        # reading.  The unconstrained argmin correctly tracks the CRT trace
+        # at echo peaks; grain contamination in flat regions does not matter
+        # because peak power is only read at detected peak columns.
         trace_y = trace_pass1
 
     else:
@@ -817,7 +822,7 @@ def extract_trace(frame: np.ndarray,
     return trace_y.astype(int), trace_y_s, trace_info
 
 
-# ── Main bang detection ────────────────────────────────────────────────────────
+# -- Main bang detection --------------------------------------------------------
 
 def detect_mb(trace_y_s: np.ndarray, cal: dict,
               search_frac: float = 0.25,
@@ -828,13 +833,13 @@ def detect_mb(trace_y_s: np.ndarray, cal: dict,
     Three-tier detection strategy:
 
     1. GUIDED (guide_x from per-frame user pick):
-       Narrow search window [guide_x−100, guide_x+50].  Baseline sampled from
+       Narrow search window [guide_x-100, guide_x+50].  Baseline sampled from
        200 px BEFORE the window.  Finds the first 5-column sustained crossing
-       20 dB above baseline, then the first local minimum ≥15 dB below baseline.
+       20 dB above baseline, then the first local minimum >=15 dB below baseline.
 
     2. BROAD FALLBACK (when guided path fails, or no guide):
-       Full-frame search using heavy Gaussian smoothing (σ=20) to suppress
-       film grain, then global argmin = maximum-power column.  Verified ≥10 dB
+       Full-frame search using heavy Gaussian smoothing (sigma=20) to suppress
+       film grain, then global argmin = maximum-power column.  Verified >=10 dB
        above noise.  Handles variable MB positions (e.g. F127: MB ranges
        254–1140 px across frames in the same TIFF).
 
@@ -855,7 +860,7 @@ def detect_mb(trace_y_s: np.ndarray, cal: dict,
     db_per_px = max(cal.get("db_per_px", 0.049), 1e-6)
     mb_x: int | None = None
 
-    # ── TIER 1: GUIDED PATH (narrow window around user click) ─────────────
+    # -- TIER 1: GUIDED PATH (narrow window around user click) -------------
     if guide_x is not None:
         lo = max(30, guide_x - 100)
         hi = min(W,  guide_x + 50)
@@ -896,21 +901,21 @@ def detect_mb(trace_y_s: np.ndarray, cal: dict,
                 if candidates:
                     mb_x = min(candidates, key=lambda c: abs(c - guide_x))
 
-    # ── Fallback tiers (when guided narrow-window found nothing) ─────────
+    # -- Fallback tiers (when guided narrow-window found nothing) ---------
     # Noise floor reference for all fallback tiers
     global_noise_y = float(np.percentile(trace_y_s, 75))
     min_depth_px   = 10.0 / db_per_px
 
-    # ── TIER 2: GUIDE POSITION CHECK ─────────────────────────────────────
+    # -- TIER 2: GUIDE POSITION CHECK -------------------------------------
     # When the guided narrow-window algorithm fails but guide_x exists,
     # check whether guide_x itself sits near a strong signal.  This handles
     # flights with STABLE MB positions (F125 ~800, F141 ~540) where
     # tiff_mb_estimate is correct but the narrow-window algorithm couldn't
     # find a clean crossing (e.g. noisy trace, edge effects).
     # We search ±20 px around guide_x for the local minimum and verify
-    # it's ≥10 dB above noise.  This avoids falling through to the broad
+    # it's >=10 dB above noise.  This avoids falling through to the broad
     # search, which can latch onto pre-trigger artifacts (observed in F141:
-    # artifact at ~150 px, −17.8 dB, stronger than the real MB at ~540 px).
+    # artifact at ~150 px, -17.8 dB, stronger than the real MB at ~540 px).
     if mb_x is None and guide_x is not None:
         check_lo  = max(0, guide_x - 20)
         check_hi  = min(W, guide_x + 20)
@@ -918,14 +923,14 @@ def detect_mb(trace_y_s: np.ndarray, cal: dict,
         if (global_noise_y - local_min) >= min_depth_px:
             mb_x = check_lo + int(np.argmin(trace_y_s[check_lo:check_hi]))
 
-    # ── TIER 3: BROAD FALLBACK (full-frame search) ────────────────────────
+    # -- TIER 3: BROAD FALLBACK (full-frame search) ------------------------
     # Used when guide_x was WRONG (tiff_mb_estimate far from real MB,
     # as observed in F127 where MB ranges 254–1140 px across frames due
     # to inconsistent oscilloscope trigger timing).  Guide position check
-    # (Tier 2) found noise floor at guide_x → guide_x is wrong →
+    # (Tier 2) found noise floor at guide_x -> guide_x is wrong ->
     # search the full frame.
     #
-    # Strategy: heavy smooth (σ=20) suppresses film grain, then global
+    # Strategy: heavy smooth (sigma=20) suppresses film grain, then global
     # argmin finds the strongest signal.  Not used when guide_x is
     # correct (Tier 2 catches that case), so pre-trigger artifacts at
     # x < 200 are only a concern when guide_x was already wrong.
@@ -937,13 +942,13 @@ def detect_mb(trace_y_s: np.ndarray, cal: dict,
         if (global_noise_y - broad_smooth[candidate]) >= min_depth_px:
             mb_x = candidate
 
-    # ── TIER 4: LAST RESORT ───────────────────────────────────────────────
+    # -- TIER 4: LAST RESORT -----------------------------------------------
     if mb_x is None:
         mb_x = guide_x if guide_x is not None else cal.get("mb_x_guess", 800)
 
     # Sanity: main bang must be well above the noise-floor reference.
     # Threshold relaxed from 15 dB to 10 dB to accommodate weaker frames
-    # (e.g. F127 CBD0421 at −45.9 dB = 14.1 dB above noise floor).
+    # (e.g. F127 CBD0421 at -45.9 dB = 14.1 dB above noise floor).
     mb_power = float(px_to_db(float(trace_y_s[mb_x]), cal))
     if mb_power < cal["y_ref_db"] + 10:
         mb_x = guide_x if guide_x is not None else cal.get("mb_x_guess", 800)
@@ -951,7 +956,7 @@ def detect_mb(trace_y_s: np.ndarray, cal: dict,
     return mb_x
 
 
-# ── Noise floor estimation ─────────────────────────────────────────────────────
+# -- Noise floor estimation -----------------------------------------------------
 
 def estimate_noise_floor(trace_y_s: np.ndarray,
                          mb_x: int,
@@ -968,14 +973,14 @@ def estimate_noise_floor(trace_y_s: np.ndarray,
     """
     pre_mb = trace_y_s[:max(1, mb_x - 30)]
     if len(pre_mb) >= 10:
-        # Median of the highest-Y (lowest-power) portion → noise baseline
+        # Median of the highest-Y (lowest-power) portion -> noise baseline
         p75 = float(np.percentile(pre_mb, 75))
         baseline_px = float(np.median(pre_mb[pre_mb >= p75]))
         return float(px_to_db(baseline_px, cal))
     return float(cal["y_ref_db"])
 
 
-# ── Echo peak detection ────────────────────────────────────────────────────────
+# -- Echo peak detection --------------------------------------------------------
 
 def detect_echoes(trace_y_s: np.ndarray,
                   mb_x: int,
@@ -1003,7 +1008,7 @@ def detect_echoes(trace_y_s: np.ndarray,
 
     region = trace_y_s[x_start:x_end]
 
-    # find_peaks on −trace (minima in y = maxima in power)
+    # find_peaks on -trace (minima in y = maxima in power)
     prom_px  = cal["peak_min_prom_dB"] / cal["db_per_px"]
     dist_px  = cal["peak_min_dist_px"]
     peak_rel = _find_peaks_numpy(region, prominence=prom_px, distance=dist_px)
@@ -1022,7 +1027,7 @@ def detect_echoes(trace_y_s: np.ndarray,
     if len(peak_cols) == 0:
         return None, None
 
-    # ── Surface selection ──────────────────────────────────────────────────────
+    # -- Surface selection ------------------------------------------------------
     # Default: first peak after mb_skip_us.  Robustness guard: if a later peak
     # within the surface search window is substantially stronger (>min_surface_
     # lead_dB), prefer it.  This rejects weak T/R ringing artefacts that slip
@@ -1034,7 +1039,7 @@ def detect_echoes(trace_y_s: np.ndarray,
     srf_cands    = peak_cols[srf_mask]
     srf_powers_c = peak_powers[srf_mask]
 
-    if len(srf_cands) == 0:           # no peak in window → fall back to first
+    if len(srf_cands) == 0:           # no peak in window -> fall back to first
         srf_cands    = peak_cols[:1]
         srf_powers_c = peak_powers[:1]
 
@@ -1086,17 +1091,17 @@ def detect_echoes(trace_y_s: np.ndarray,
         gap_lo = surface_x + quiet_lead_px
         gap_hi = c
 
-        # ── Quiet-gap check ───────────────────────────────────────────────────
-        # Skip when gap is < 1 µs (very thin ice, h ≤ 84 m)
+        # -- Quiet-gap check ---------------------------------------------------
+        # Skip when gap is < 1 µs (very thin ice, h <= 84 m)
         if gap_hi - gap_lo >= int(1.0 / cal["us_per_px"]):
             gap_trace = trace_y_s[gap_lo:gap_hi]
             if float(np.max(gap_trace)) < nf_row - quiet_gap_px:
-                continue   # trace never returns to NF → continuous artifact
+                continue   # trace never returns to NF -> continuous artifact
 
-        # ── Width check ───────────────────────────────────────────────────────
+        # -- Width check -------------------------------------------------------
         # The smoothed trace must stay above width_thresh_y for at least
         # min_bed_w_px consecutive columns around the candidate.
-        # Real bed echoes: ≥ 0.83 µs wide (F125 TIFF 8400 validated data).
+        # Real bed echoes: >= 0.83 µs wide (F125 TIFF 8400 validated data).
         # Film artifacts / surface-echo ringing: < 0.45 µs wide.
         w_lo    = max(0, c - min_bed_w_px * 3)
         w_hi    = min(W, c + min_bed_w_px * 3)
@@ -1109,7 +1114,7 @@ def detect_echoes(trace_y_s: np.ndarray,
         ends    = np.where(diff < 0)[0]
         max_run = 0 if len(starts) == 0 else int((ends - starts).max())
         if max_run < min_bed_w_px:
-            continue   # too narrow → film artifact or surface-echo ringing
+            continue   # too narrow -> film artifact or surface-echo ringing
 
         cand_power = float(px_to_db(trace_y_s[c], cal))
         valid_beds.append((c, cand_power))
@@ -1123,7 +1128,7 @@ def detect_echoes(trace_y_s: np.ndarray,
     return surface_x, bed_x
 
 
-# ── Envelope walker ────────────────────────────────────────────────────────────
+# -- Envelope walker ------------------------------------------------------------
 
 def walk_envelope(trace_y_s: np.ndarray,
                   x_peak: int,
@@ -1186,7 +1191,7 @@ def walk_envelope(trace_y_s: np.ndarray,
     return lead_us, trail_us, float(trail_us - lead_us)
 
 
-# ── Peakiness ─────────────────────────────────────────────────────────────────
+# -- Peakiness -----------------------------------------------------------------
 
 def compute_peakiness(trace_y_s: np.ndarray,
                       x_peak: int,
@@ -1197,7 +1202,7 @@ def compute_peakiness(trace_y_s: np.ndarray,
     Peakiness = peak power (linear) / mean power (linear) within ±10 dB window.
 
     > 1 : sharply peaked (specular reflector / liquid water)
-    ≈ 1 : flat-topped (rough / noise-dominated)
+    ~ 1 : flat-topped (rough / noise-dominated)
     """
     x0 = max(0, lead_px)
     x1 = min(len(trace_y_s) - 1, trail_px) + 1
@@ -1214,7 +1219,7 @@ def compute_peakiness(trace_y_s: np.ndarray,
     return float(peak_lin / mean_lin)
 
 
-# ── Per-echo full metrics ──────────────────────────────────────────────────────
+# -- Per-echo full metrics ------------------------------------------------------
 
 def compute_echo_metrics(trace_y_s: np.ndarray,
                          x_peak: int,
@@ -1291,7 +1296,7 @@ def compute_echo_metrics(trace_y_s: np.ndarray,
     return result
 
 
-# ── Y grid lines: extrapolation (graticule too faint to detect directly) ──────
+# -- Y grid lines: extrapolation (graticule too faint to detect directly) ------
 
 def compute_y_grid_lines(y_ref_px: float,
                           y_spacing_px: float,
@@ -1303,24 +1308,24 @@ def compute_y_grid_lines(y_ref_px: float,
     """
     Compute Y (horizontal) grid line positions by extrapolation.
 
-    CRITICAL: The −60 dB reference line sits BETWEEN two major graticule
-    divisions at −55 dB and −65 dB, not on a division.  The offset from
-    y_ref_px to the nearest graticule line above (−55 dB) is half a major
-    division ≈ y_spacing_px / 2 ≈ 102.5 px (validated from F125 Frame 8:
-    y_ref=1507, nearest grid=1404 → offset=103 px, from detect_gridlines3.py).
+    CRITICAL: The -60 dB reference line sits BETWEEN two major graticule
+    divisions at -55 dB and -65 dB, not on a division.  The offset from
+    y_ref_px to the nearest graticule line above (-55 dB) is half a major
+    division ~ y_spacing_px / 2 ~ 102.5 px (validated from F125 Frame 8:
+    y_ref=1507, nearest grid=1404 -> offset=103 px, from detect_gridlines3.py).
 
-    Graticule lines: …, −45, −55, −65, −75, … dB
-    NOT at:         …, −50, −60, −70, −80, … dB
+    Graticule lines: …, -45, -55, -65, -75, … dB
+    NOT at:         …, -50, -60, -70, -80, … dB
 
     Formula:
-        y_first = y_ref_px − y_spacing_px / 2    (→ −55 dB)
+        y_first = y_ref_px - y_spacing_px / 2    (-> -55 dB)
         y_grid[k] = y_first + k × y_spacing_px
 
     Returns
     -------
     Sorted list of Y row positions within [y_disp_lo, y_disp_hi].
     """
-    # First graticule above the reference line (−55 dB)
+    # First graticule above the reference line (-55 dB)
     y_first = y_ref_px - y_spacing_px / 2.0
     lines = []
     for k in range(-n_above, n_below + 1):
@@ -1330,7 +1335,7 @@ def compute_y_grid_lines(y_ref_px: float,
     return sorted(lines)
 
 
-# ── X grid lines: argmax in below-baseline band (validated approach) ──────────
+# -- X grid lines: argmax in below-baseline band (validated approach) ----------
 
 def detect_xgrid_lines(frame: np.ndarray,
                         mb_x: int,
@@ -1349,11 +1354,11 @@ def detect_xgrid_lines(frame: np.ndarray,
     between the noise floor and the bottom display line.
 
     Critical band selection: y=[1600, 1695] sits BETWEEN the noise floor
-    (y_ref ≈ 1512) and the bottom major horizontal display line (y ≈ 1717).
+    (y_ref ~ 1512) and the bottom major horizontal display line (y ~ 1717).
     In this region only MAJOR vertical grid lines are visible — minor tick
-    notches exist only along horizontal major lines (y≈1717, 1512, …) and
+    notches exist only along horizontal major lines (y~1717, 1512, …) and
     do not appear inside this intermediate band.  The previous band (1550, 1800)
-    included y≈1717 where minor tick notches at every x_spacing/5 ≈ 41 px
+    included y~1717 where minor tick notches at every x_spacing/5 ~ 41 px
     scored higher than the diffuse major vertical lines, causing the phase
     search to lock onto minor tick positions (offset 1–4 minor ticks from
     the true major tick phase).
@@ -1396,7 +1401,7 @@ def detect_xgrid_lines(frame: np.ndarray,
     col_mean   = np.mean(below, axis=0)
     col_smooth = _gauss_smooth(col_mean, gauss_sigma)
 
-    # ── Find the first grid tick ───────────────────────────────────────────
+    # -- Find the first grid tick -------------------------------------------
     # The tick marks appear as bright columns in the below-baseline band.
     #
     # Priority A: use clicked x_grid guide positions (most accurate).
@@ -1433,11 +1438,11 @@ def detect_xgrid_lines(frame: np.ndarray,
         #
         # Physical basis: the oscilloscope sweep is triggered from the radar transmit
         # pulse, so all waveform content is time-locked to the graticule.  D = tick_x
-        # − mb_x is constant across frames within a TIFF (same oscilloscope time base).
+        # - mb_x is constant across frames within a TIFF (same oscilloscope time base).
         #
         # Strategy: predict the anchor tick's frame-relative position as
         # anchor_pred = mb_x + d_from_mb, snap ±half_search around it to find the
-        # actual tick, then back-calculate first_x = anchor_x − k_anchor * spacing.
+        # actual tick, then back-calculate first_x = anchor_x - k_anchor * spacing.
         # The anchor lands in the right portion of the frame (past the bright left-side
         # artifact), giving a reliable snap even when major ticks are faint.
         k_anchor    = max(0, round(d_from_mb / x_spacing_px))
@@ -1461,7 +1466,7 @@ def detect_xgrid_lines(frame: np.ndarray,
         # Fix: score only positions in the right 65% of the frame (x > W*0.35).
         # This region is after the main bang and early echoes, where the trace
         # sits at the noise floor and the only periodic features are the CRT
-        # graticule ticks.  Typically ≥8 major ticks remain in this region —
+        # graticule ticks.  Typically >=8 major ticks remain in this region —
         # sufficient for reliable phase estimation.
         #
         # Coarse sweep over all phases (~200 steps), then 0.1 px fine refinement.
@@ -1532,7 +1537,7 @@ def detect_xgrid_lines(frame: np.ndarray,
     return x_fitted, spacing
 
 
-# ── Per-frame calibration ──────────────────────────────────────────────────────
+# -- Per-frame calibration ------------------------------------------------------
 
 def detect_frame_calibration(
         frame: np.ndarray,
@@ -1548,8 +1553,8 @@ def detect_frame_calibration(
        column where the trace is deflected highest.  If a guide pick is
        provided, narrows search to ±200 px around it (find_mainbang2.py).
 
-    B. Y reference (y_ref_px, −60 dB): pre-main-bang trace median sits at
-       the system noise floor = the −60 dB reference line.
+    B. Y reference (y_ref_px, -60 dB): pre-main-bang trace median sits at
+       the system noise floor = the -60 dB reference line.
 
     C. X grid lines: column-mean argmax in below-baseline band y=[1550,1800].
        Grid tick marks are bright; we fit an inlier-only linear model
@@ -1575,7 +1580,7 @@ def detect_frame_calibration(
     cal : updated dict with added keys:
         mb_x           – detected main bang column (frame-relative pixels)
         mb_power_dB    – power at main bang (dB)
-        y_ref_px       – noise-floor row = −60 dB anchor (pixels)
+        y_ref_px       – noise-floor row = -60 dB anchor (pixels)
         db_per_px      – Y scale (dB/px; from y_spacing_px)
         hgrid_lines    – list of Y grid line rows (extrapolated)
         hgrid_spacing  – Y major-division spacing used (px)
@@ -1594,7 +1599,7 @@ def detect_frame_calibration(
                          default_cal.get("y_spacing_px",
                          10.0 / default_cal["db_per_px"])))
 
-    # ── A: Main bang ──────────────────────────────────────────────────────
+    # -- A: Main bang ------------------------------------------------------
     trace_y, trace_y_s, _ = extract_trace(frame, cal)
     guide_mb           = guides.get("mb")
     mb_x               = detect_mb(trace_y_s, cal, guide_x=guide_mb)
@@ -1603,7 +1608,7 @@ def detect_frame_calibration(
     cal["mb_x"]        = mb_x
     cal["mb_power_dB"] = mb_power_dB
 
-    # ── B: Y reference (noise floor = −60 dB) ────────────────────────────
+    # -- B: Y reference (noise floor = -60 dB) ----------------------------
     guide_ref = guides.get("ref")
     if guide_ref is not None:
         # Guide provided: use it directly (user confirmed the reference line)
@@ -1612,7 +1617,7 @@ def detect_frame_calibration(
         # No guide: sample from the MIDDLE of the pre-bang region.
         # Avoid frame-boundary artifacts (cols 0–30) and the main bang's
         # leading edge (last ~50 px before mb_x).
-        # Safe window: mb_x//4 → mb_x//2, clamped away from the bang.
+        # Safe window: mb_x//4 -> mb_x//2, clamped away from the bang.
         pre_lo = max(30, mb_x // 4)
         pre_hi = min(max(pre_lo + 10, mb_x // 2), max(pre_lo + 5, mb_x - 50))
         if pre_hi > pre_lo + 5:
@@ -1630,7 +1635,7 @@ def detect_frame_calibration(
     cal["y_ref_px"] = y_ref_px
     cal["y_ref_db"] = -60.0
 
-    # ── C: X grid lines (argmax in below-baseline band) ──────────────────
+    # -- C: X grid lines (argmax in below-baseline band) ------------------
     x_fitted, x_spacing_detected = detect_xgrid_lines(
         frame, mb_x, x_spacing_px, cal,
         guide_x_grid=guides.get("x_grid"),
@@ -1638,7 +1643,7 @@ def detect_frame_calibration(
     cal["xgrid_lines"]  = x_fitted.tolist()
     cal["x_spacing_px"] = x_spacing_detected
 
-    # ── D: Y grid lines (pure extrapolation) ─────────────────────────────
+    # -- D: Y grid lines (pure extrapolation) -----------------------------
     hgrid_lines = compute_y_grid_lines(
         y_ref_px, y_spacing_px,
         cal["y_disp_lo"], cal["y_disp_hi"])
@@ -1650,7 +1655,7 @@ def detect_frame_calibration(
     return cal
 
 
-# ── Main entry: process one TIFF ──────────────────────────────────────────────
+# -- Main entry: process one TIFF ----------------------------------------------
 
 def process_tiff(tiff_path: str | Path,
                  cal: dict | None = None,
@@ -1676,7 +1681,7 @@ def process_tiff(tiff_path: str | Path,
 
     if verbose:
         print(f"\nLYRA v1.0 — processing {tiff_path.name}")
-        print("─" * 70)
+        print("-" * 70)
 
     Image.MAX_IMAGE_PIXELS = None
     img      = np.array(Image.open(tiff_path), dtype=np.float32)
@@ -1749,7 +1754,7 @@ def process_tiff(tiff_path: str | Path,
     return results
 
 
-# ── DataFrame serialisation ────────────────────────────────────────────────────
+# -- DataFrame serialisation ----------------------------------------------------
 
 def to_dataframe(results: list[LyraFrame],
                  tiff_path: str | Path | None = None) -> pd.DataFrame:

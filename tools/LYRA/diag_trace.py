@@ -6,7 +6,7 @@ intermediate stage of the robust trace extraction algorithm:
 
   Panel 1: Raw frame image with ALL trace overlays
   Panel 2: Signal extent (per-column dark-pixel density)
-  Panel 3: Pass-1 unconstrained trace vs coarse smooth (σ=30)
+  Panel 3: Pass-1 unconstrained trace vs coarse smooth (sigma=30)
   Panel 4: Constrained trace vs pass-1 (residual)
   Panel 5: Final trace_y_s vs CRT argmin (zoomed to echo region)
 
@@ -36,7 +36,7 @@ from lyra import (
     ensure_canonical_name, tiff_id,
 )
 
-# ── Targets ──────────────────────────────────────────────────────────────────
+# -- Targets ------------------------------------------------------------------
 TARGETS = [
     dict(tiff="Data/ascope/raw/127/47_0004850_0004874-reel_begin_end.tiff",
          cbd="0440", frame_idx=8, issue="surface trace misalignment"),
@@ -57,7 +57,7 @@ for target in TARGETS:
     cbd = target["cbd"]
     fidx = target["frame_idx"]
 
-    # ── Load calibration for this frame ───────────────────────────────────
+    # -- Load calibration for this frame -----------------------------------
     tiff_name = TIFF.name
     row = cal_df[(cal_df["tiff"] == tiff_name) &
                  (cal_df["frame_idx"] == str(fidx))].iloc[0]
@@ -68,7 +68,7 @@ for target in TARGETS:
     cal["us_per_px"] = float(row["us_per_px"])
     mb_x = cal["mb_x"]
 
-    # ── Load frame ────────────────────────────────────────────────────────
+    # -- Load frame --------------------------------------------------------
     idx_df = pd.read_csv(ROOT / f"tools/LYRA/output/F{FLT}/phase1/F{FLT}_frame_index.csv", dtype=str)
     idx_row = idx_df[(idx_df["tiff"] == tiff_name) &
                      (idx_df["frame_idx"] == str(fidx))].iloc[0]
@@ -86,7 +86,7 @@ for target in TARGETS:
     print(f"  TIFF: {tiff_name}  frame_idx={fidx}  mb_x={mb_x}")
     print(f"  Frame: {W}×{H} px  left={left_px} right={right_px}")
 
-    # ── Reproduce extract_trace internals step by step ────────────────────
+    # -- Reproduce extract_trace internals step by step --------------------
     y_lo = cal["y_disp_lo"]
     y_hi = min(cal["y_disp_hi"], H)
     band = frame[y_lo:y_hi, :]
@@ -154,7 +154,7 @@ for target in TARGETS:
     # For comparison: what the unconstrained trace gives us
     trace_y = trace_pass1.copy()  # this is what gets returned as trace_y
 
-    # ── Echo detection (to show what peaks are found) ─────────────────────
+    # -- Echo detection (to show what peaks are found) ---------------------
     noise_floor_dB = estimate_noise_floor(trace_y_s, mb_x, cal)
     surface_x, bed_x = detect_echoes(trace_y_s, mb_x, noise_floor_dB, cal)
 
@@ -172,7 +172,7 @@ for target in TARGETS:
     else:
         print(f"  Bed: NOT DETECTED")
 
-    # ── Per-column dark-pixel density (for signal extent understanding) ───
+    # -- Per-column dark-pixel density (for signal extent understanding) ---
     binary_thresh = cal.get("signal_binary_thresh", 0.30)
     binary = (band < binary_thresh).astype(np.uint8)
     # Exclude graticule rows
@@ -188,7 +188,7 @@ for target in TARGETS:
     col_smooth = _gauss_smooth(col_count, cal.get("signal_density_sigma", 30))
     density_thresh = cal.get("signal_density_thresh", 50)
 
-    # ── Compute where constrained search window actually was ──────────────
+    # -- Compute where constrained search window actually was --------------
     # At key columns (surface, bed), show the actual search window
     echo_cols = []
     if surface_x is not None:
@@ -221,13 +221,13 @@ for target in TARGETS:
         print(f"  Expected bed position ({expected_bed_x}) "
               f"is within sig_end ({sig_end})")
 
-    # ── 5-panel diagnostic figure ─────────────────────────────────────────
+    # -- 5-panel diagnostic figure -----------------------------------------
     fig, axes = plt.subplots(5, 1, figsize=(18, 22), constrained_layout=True)
     fig.patch.set_facecolor("white")
 
     x_all = np.arange(W)
 
-    # ── Panel 1: Frame image with all trace overlays ──────────────────────
+    # -- Panel 1: Frame image with all trace overlays ----------------------
     ax = axes[0]
     ax.imshow(frame, cmap="gray", vmin=0, vmax=1, aspect="auto",
               extent=[0, W, H, 0])
@@ -236,11 +236,11 @@ for target in TARGETS:
     ax.plot(x_all, trace_pass1, color="blue", lw=0.7, alpha=0.6,
             label="pass-1 (gated)")
     ax.plot(x_all, coarse, color="yellow", lw=1.5, alpha=0.8,
-            label="coarse smooth σ=30")
+            label="coarse smooth sigma=30")
     ax.plot(x_all, trace_constrained, color="red", lw=0.8, alpha=0.7,
             label="pass-2 constrained ±250")
     ax.plot(x_all, trace_y_s, color="magenta", lw=1.0, alpha=0.9,
-            label="trace_y_s (final, σ=5)")
+            label="trace_y_s (final, sigma=5)")
     # Signal extent boundaries
     ax.axvline(sig_start, color="lime", lw=1.5, ls="--", label=f"sig_start={sig_start}")
     ax.axvline(sig_end, color="lime", lw=1.5, ls=":", label=f"sig_end={sig_end}")
@@ -265,7 +265,7 @@ for target in TARGETS:
                  fontsize=9, fontweight="bold")
     ax.set_ylabel("Row (px)", fontsize=8)
 
-    # ── Panel 2: Signal extent (dark-pixel density) ───────────────────────
+    # -- Panel 2: Signal extent (dark-pixel density) -----------------------
     ax = axes[1]
     ax.plot(x_all, col_count, color="gray", lw=0.5, alpha=0.5, label="raw count")
     ax.plot(x_all, col_smooth, color="blue", lw=1.2, label="smoothed count")
@@ -281,7 +281,7 @@ for target in TARGETS:
     ax.legend(fontsize=7, loc="upper right")
     ax.set_title("Panel 2: Signal extent — per-column dark-pixel density", fontsize=9)
 
-    # ── Panel 3: Pass-1 trace vs coarse smooth ────────────────────────────
+    # -- Panel 3: Pass-1 trace vs coarse smooth ----------------------------
     ax = axes[2]
     # Plot as power (dB) for readability
     pass1_db = np.array([px_to_db(y, cal) for y in trace_pass1])
@@ -289,7 +289,7 @@ for target in TARGETS:
     raw_db = np.array([px_to_db(y, cal) for y in trace_gm])
     ax.plot(x_all, raw_db, color="cyan", lw=0.5, alpha=0.4, label="raw argmin")
     ax.plot(x_all, pass1_db, color="blue", lw=0.7, alpha=0.6, label="pass-1")
-    ax.plot(x_all, coarse_db, color="yellow", lw=1.5, alpha=0.8, label="coarse σ=30")
+    ax.plot(x_all, coarse_db, color="yellow", lw=1.5, alpha=0.8, label="coarse sigma=30")
     ax.axhline(noise_floor_dB, color="gray", lw=0.7, ls="--", alpha=0.5)
     ax.axvline(sig_start, color="lime", lw=1, ls="--", alpha=0.5)
     ax.axvline(sig_end, color="lime", lw=1, ls=":", alpha=0.5)
@@ -301,14 +301,14 @@ for target in TARGETS:
     ax.set_title("Panel 3: Pass-1 (unconstrained) vs coarse smooth — power space",
                  fontsize=9)
 
-    # ── Panel 4: Constrained vs pass-1 residual ──────────────────────────
+    # -- Panel 4: Constrained vs pass-1 residual --------------------------
     ax = axes[3]
     constrained_db = np.array([px_to_db(y, cal) for y in trace_constrained])
     final_db = np.array([px_to_db(y, cal) for y in trace_y_s])
     residual = constrained_db - pass1_db
     ax.plot(x_all, pass1_db, color="blue", lw=0.5, alpha=0.4, label="pass-1")
     ax.plot(x_all, constrained_db, color="red", lw=0.7, alpha=0.6, label="constrained")
-    ax.plot(x_all, final_db, color="magenta", lw=1.0, alpha=0.8, label="final (σ=5)")
+    ax.plot(x_all, final_db, color="magenta", lw=1.0, alpha=0.8, label="final (sigma=5)")
     ax.axhline(noise_floor_dB, color="gray", lw=0.7, ls="--", alpha=0.5)
     ax.axvline(sig_start, color="lime", lw=1, ls="--", alpha=0.5)
     ax.axvline(sig_end, color="lime", lw=1, ls=":", alpha=0.5)
@@ -324,7 +324,7 @@ for target in TARGETS:
     ax.legend(fontsize=7, loc="upper right")
     ax.set_title("Panel 4: Constrained vs pass-1 — where do they diverge?", fontsize=9)
 
-    # ── Panel 5: Zoomed echo region — constrained search window analysis ──
+    # -- Panel 5: Zoomed echo region — constrained search window analysis --
     ax = axes[4]
     # Zoom to the region around echoes: MB+2µs to MB+15µs
     zoom_lo = mb_x + int(2.0 / cal["us_per_px"])
@@ -337,7 +337,7 @@ for target in TARGETS:
     ax.plot(zoom_x, trace_pass1[zoom_lo:zoom_hi], color="blue", lw=0.7, alpha=0.5,
             label="pass-1")
     ax.plot(zoom_x, coarse[zoom_lo:zoom_hi], color="yellow", lw=1.5, alpha=0.7,
-            label="coarse σ=30")
+            label="coarse sigma=30")
     # Show the ±250 search window as a shaded band around the coarse
     coarse_zoom = coarse[zoom_lo:zoom_hi]
     ax.fill_between(zoom_x, coarse_zoom - max_jump, coarse_zoom + max_jump,

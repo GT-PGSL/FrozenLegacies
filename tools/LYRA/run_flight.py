@@ -27,7 +27,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-# ── Paths ────────────────────────────────────────────────────────────────────
+# -- Paths --------------------------------------------------------------------
 
 ROOT = Path(__file__).resolve().parents[2]  # FrozenLegacies/
 DETECT_SCRIPT   = ROOT / "tools/LYRA/detect_frames.py"
@@ -38,12 +38,12 @@ VALIDATE_SCRIPT = ROOT / "tools/LYRA/validate_flight.py"
 PICKS_DIR = ROOT / "Data/ascope/picks"
 
 
-# ── Utility ──────────────────────────────────────────────────────────────────
+# -- Utility ------------------------------------------------------------------
 
 def _tiff_id(path: Path) -> int:
     """Extract numeric TIFF start number from canonical filename.
 
-    Example: 47_0002525_0002549-reel_begin_end.tiff → 2525
+    Example: 47_0002525_0002549-reel_begin_end.tiff -> 2525
     """
     parts = path.stem.split("_")
     if len(parts) >= 2:
@@ -100,7 +100,7 @@ def _pause(msg: str = "Press ENTER to continue ..."):
         sys.exit(1)
 
 
-# ── Phase 1: Frame Detection ────────────────────────────────────────────────
+# -- Phase 1: Frame Detection ------------------------------------------------
 
 def run_phase1(flt: int, tiffs: list[Path], method: str, out_dir: Path):
     """Run frame detection on all TIFFs, print CBD lookup table."""
@@ -153,7 +153,7 @@ def run_phase1(flt: int, tiffs: list[Path], method: str, out_dir: Path):
 
 
 def print_cbd_table(flt: int, out_dir: Path):
-    """Pretty-print TIFF → CBD mapping from the frame index."""
+    """Pretty-print TIFF -> CBD mapping from the frame index."""
     index_csv = out_dir / "phase1" / f"F{flt}_frame_index.csv"
     if not index_csv.exists():
         print("  (no frame index found)")
@@ -163,7 +163,7 @@ def print_cbd_table(flt: int, out_dir: Path):
     df.columns = df.columns.str.strip()
 
     print(f"\n  {'TIFF ID':>7}  {'CBD Range':>12}  {'Frames':>6}  TIFF Filename")
-    print(f"  {'─'*7}  {'─'*12}  {'─'*6}  {'─'*50}")
+    print(f"  {'-'*7}  {'-'*12}  {'-'*6}  {'-'*50}")
 
     for tid, grp in df.groupby("tiff_id", sort=True):
         tiff_name = grp["tiff"].iloc[0]
@@ -191,7 +191,7 @@ def _delete_tiff_rows(csv_path: Path, tiff_ids: list[int]):
     print(f"  Removed {before - len(df)} rows for TIFFs {tiff_ids} from {csv_path.name}")
 
 
-# ── Phase 3: Calibration ────────────────────────────────────────────────────
+# -- Phase 3: Calibration ----------------------------------------------------
 
 def run_phase3(flt: int, tiffs: list[Path], out_dir: Path) -> dict:
     """Run calibration on all TIFFs with y_ref failure detection."""
@@ -296,7 +296,7 @@ def _flag_bad_cbds(sub: pd.DataFrame) -> list[int]:
 
 
 def print_phase3_cbd_table(flt: int, out_dir: Path) -> tuple[list[int], dict[int, tuple[str, list[int]]]]:
-    """Print TIFF → CBD mapping with MB quality flags.
+    """Print TIFF -> CBD mapping with MB quality flags.
 
     Returns (check_tiff_ids, check_details) where check_details maps
     tiff_id -> (reason, bad_cbd_list).
@@ -308,10 +308,10 @@ def print_phase3_cbd_table(flt: int, out_dir: Path) -> tuple[list[int], dict[int
     df = pd.read_csv(cal_csv)
     df.columns = df.columns.str.strip()
 
-    print(f"\n  TIFF → CBD mapping (phase 3 calibration):")
+    print(f"\n  TIFF -> CBD mapping (phase 3 calibration):")
     print(f"  {'TIFF':>6}  {'CBD range':>14}  {'frames':>6}  {'mb_x med':>9}  {'mb_x std':>9}  "
           f"{'mb_pwr med':>10}  {'mb_pwr std':>10}  {'flag':>6}")
-    print(f"  {'─'*85}")
+    print(f"  {'-'*85}")
 
     check_tiffs: list[int] = []
     check_details: dict[int, tuple[str, list[int]]] = {}  # tid -> (reason, bad_cbds)
@@ -364,9 +364,9 @@ def print_phase3_cbd_table(flt: int, out_dir: Path) -> tuple[list[int], dict[int
         RED = "\033[31m"
         RESET = "\033[0m"
 
-        print(f"\n  {BOLD}{YELLOW}┌{'─'*70}┐{RESET}")
-        print(f"  {BOLD}{YELLOW}│  ⚠  CHECK TIFFs — review diagnostic PNGs in phase3/{' '*19}│{RESET}")
-        print(f"  {BOLD}{YELLOW}├{'─'*70}┤{RESET}")
+        print(f"\n  {BOLD}{YELLOW}+{'-'*70}+{RESET}")
+        print(f"  {BOLD}{YELLOW}|  [!]  CHECK TIFFs — review diagnostic PNGs in phase3/{' '*19}|{RESET}")
+        print(f"  {BOLD}{YELLOW}+{'-'*70}+{RESET}")
         for tid in check_tiffs:
             reason, bad_cbds = check_details[tid]
             # Count total CBDs in this TIFF
@@ -375,13 +375,13 @@ def print_phase3_cbd_table(flt: int, out_dir: Path) -> tuple[list[int], dict[int
                 cbd_str = "all CBDs"
             else:
                 cbd_str = ", ".join(f"{c:04d}" for c in bad_cbds)
-            line = f"TIFF {tid}: {reason} → {cbd_str}"
+            line = f"TIFF {tid}: {reason} -> {cbd_str}"
             # Wrap long lines
             if len(line) <= 68:
-                print(f"  {BOLD}{YELLOW}│{RESET}  {RED}{line:<68}{RESET}{BOLD}{YELLOW}│{RESET}")
+                print(f"  {BOLD}{YELLOW}|{RESET}  {RED}{line:<68}{RESET}{BOLD}{YELLOW}|{RESET}")
             else:
-                print(f"  {BOLD}{YELLOW}│{RESET}  {RED}{line[:68]}{RESET}{BOLD}{YELLOW}│{RESET}")
-                print(f"  {BOLD}{YELLOW}│{RESET}  {RED}{'':>16}{line[68:]:<52}{RESET}{BOLD}{YELLOW}│{RESET}")
+                print(f"  {BOLD}{YELLOW}|{RESET}  {RED}{line[:68]}{RESET}{BOLD}{YELLOW}|{RESET}")
+                print(f"  {BOLD}{YELLOW}|{RESET}  {RED}{'':>16}{line[68:]:<52}{RESET}{BOLD}{YELLOW}|{RESET}")
         # Count total flagged CBDs across all CHECK TIFFs
         n_flagged_cbds = 0
         n_total_cbds = len(df)
@@ -390,9 +390,9 @@ def print_phase3_cbd_table(flt: int, out_dir: Path) -> tuple[list[int], dict[int
             n_in_tiff = len(df[df["tiff_id"] == tid]["cbd"].dropna())
             n_flagged_cbds += len(bad_cbds) if bad_cbds and len(bad_cbds) < n_in_tiff else n_in_tiff
         summary = f"{n_flagged_cbds} of {n_total_cbds} frames need checking"
-        print(f"  {BOLD}{YELLOW}├{'─'*70}┤{RESET}")
-        print(f"  {BOLD}{YELLOW}│{RESET}  {BOLD}{summary:<68}{RESET}{BOLD}{YELLOW}│{RESET}")
-        print(f"  {BOLD}{YELLOW}└{'─'*70}┘{RESET}")
+        print(f"  {BOLD}{YELLOW}+{'-'*70}+{RESET}")
+        print(f"  {BOLD}{YELLOW}|{RESET}  {BOLD}{summary:<68}{RESET}{BOLD}{YELLOW}|{RESET}")
+        print(f"  {BOLD}{YELLOW}+{'-'*70}+{RESET}")
 
     return check_tiffs, check_details
 
@@ -452,7 +452,7 @@ def run_phase4(flt: int, tiffs: list[Path], out_dir: Path) -> dict:
     return {"success": success, "failed": failed, "skipped": skipped}
 
 
-# ── Phase 5: Validation ─────────────────────────────────────────────────────
+# -- Phase 5: Validation -----------------------------------------------------
 
 def run_phase5(flt: int, out_dir: Path):
     """Run BEDMAP1 validation and print flight summary."""
@@ -519,7 +519,7 @@ def print_flight_summary(flt: int, out_dir: Path):
     print(f"    TIFFs:         {n_tiffs}")
 
 
-# ── Main ─────────────────────────────────────────────────────────────────────
+# -- Main ---------------------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(
@@ -549,7 +549,7 @@ def main():
     non_canonical = [t for t in tiffs if t not in canonical]
 
     print(f"\n  LYRA Flight Orchestrator — F{flt}")
-    print(f"  {'─'*40}")
+    print(f"  {'-'*40}")
     print(f"  Raw directory:  {raw_dir}")
     print(f"  TIFFs found:    {len(canonical)} canonical" +
           (f" + {len(non_canonical)} non-canonical (skipped)" if non_canonical else ""))
@@ -560,7 +560,7 @@ def main():
 
     tiffs = canonical
 
-    # ── Phase 1 ──────────────────────────────────────────────────────────
+    # -- Phase 1 ----------------------------------------------------------
     if args.resume_from <= 1:
         print(f"\n  {'='*55}")
         print(f"  PHASE 1: Frame Detection + CBD Assignment")
@@ -573,7 +573,7 @@ def main():
         print(f"    python tools/LYRA/detect_frames.py <TIFF> --method manual --override FR:CBD ...")
         _pause("Press ENTER when CBD assignments are correct ...")
 
-    # ── Phase 2 ──────────────────────────────────────────────────────────
+    # -- Phase 2 ----------------------------------------------------------
     if args.resume_from <= 2 and not args.skip_picks:
         print(f"\n  {'='*55}")
         print(f"  PHASE 2: Pick Calibration (M + R + X on each TIFF)")
@@ -590,7 +590,7 @@ def main():
             print(f"\n  pick_calibration exited with code {result.returncode}.")
             _pause("Press ENTER to continue to phase 3 anyway, or Ctrl-C to abort ...")
 
-    # ── Phase 3: Calibration ─────────────────────────────────────────────
+    # -- Phase 3: Calibration ---------------------------------------------
     if args.resume_from <= 3:
         print(f"\n  {'='*55}")
         print(f"  PHASE 3: Per-Frame Calibration")
@@ -671,7 +671,7 @@ def main():
 
         _pause("Press ENTER to proceed to phase 4 ...")
 
-    # ── Phase 4: Echo Extraction ─────────────────────────────────────────
+    # -- Phase 4: Echo Extraction -----------------------------------------
     if args.resume_from <= 4:
         print(f"\n  {'='*55}")
         print(f"  PHASE 4: Echo Extraction")
@@ -679,7 +679,7 @@ def main():
 
         run_phase4(flt, tiffs, out_dir)
 
-    # ── Phase 5: Validation ──────────────────────────────────────────────
+    # -- Phase 5: Validation ----------------------------------------------
     if args.resume_from <= 5:
         print(f"\n  {'='*55}")
         print(f"  PHASE 5: Validation (BEDMAP1 comparison)")
