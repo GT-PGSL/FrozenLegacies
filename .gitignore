@@ -22,6 +22,9 @@ CalpipPicker/
 **/backup/
 **/backup_copies/
 
+# ── Trained ML models (too large for GitHub) ────────────────
+tools/LYRA/models/*.pkl
+
 # ── Python build artifacts ──────────────────────────────────
 __pycache__/
 *.pyc

@@ -111,12 +111,12 @@ def run_phase1(flt: int, tiffs: list[Path], method: str, out_dir: Path):
     success, failed, skipped = [], [], []
 
     for i, tiff in enumerate(tiffs, 1):
-        label = tiff.stem.split("-")[0]  # e.g. "47_0002525_0002549"
+        tid = _tiff_id(tiff)
 
         # Skip if already processed
         if check_tiff_in_csv(tiff.name, index_csv):
             skipped.append(tiff)
-            print(f"  [{i:>2}/{len(tiffs)}] {label}  [skip] already in frame index")
+            print(f"  [{i:>2}/{len(tiffs)}]  {tid:>5}  [skip]")
             continue
 
         # Determine method for this TIFF
@@ -125,21 +125,26 @@ def run_phase1(flt: int, tiffs: list[Path], method: str, out_dir: Path):
         if method == "manual" and tiff.stem not in astra:
             tiff_method = "segment"
             extra = ["--method", "segment"]
-            print(f"  [{i:>2}/{len(tiffs)}] {label}  [warn] no ASTRA picks, using segment OCR")
 
         result = _run_step(DETECT_SCRIPT, tiff, extra)
         if result.returncode == 0:
             success.append(tiff)
-            # Extract frame count from stdout
+            # Extract per-TIFF frame count from stdout
+            n_frames = 0
             for line in result.stdout.splitlines():
-                if "Total rows" in line:
-                    print(f"  [{i:>2}/{len(tiffs)}] {label}  [ok]   {tiff_method}  {line.strip()}")
-                    break
-            else:
-                print(f"  [{i:>2}/{len(tiffs)}] {label}  [ok]   {tiff_method}")
+                if "Frames" in line and "detected" in line:
+                    try:
+                        n_frames = int(line.split(":")[1].split("detected")[0].strip())
+                    except (ValueError, IndexError):
+                        pass
+            note = ""
+            if method == "manual" and tiff_method == "segment":
+                note = "  (no ASTRA)"
+            print(f"  [{i:>2}/{len(tiffs)}]  {tid:>5}  [{n_frames:>3} fr]  {tiff_method}{note}")
         else:
-            failed.append((tiff, result.stderr.strip().split("\n")[-1]))
-            print(f"  [{i:>2}/{len(tiffs)}] {label}  [FAIL] {result.stderr.strip().split(chr(10))[-1][:80]}")
+            err_line = (result.stderr + result.stdout).strip().split("\n")[-1]
+            failed.append((tiff, err_line))
+            print(f"  [{i:>2}/{len(tiffs)}]  {tid:>5}  \033[31m[FAIL]\033[0m {err_line[:60]}")
 
     # Print summary
     print(f"\n  Phase 1 summary: {len(success)} new, {len(skipped)} skipped, {len(failed)} failed")
@@ -200,30 +205,33 @@ def run_phase3(flt: int, tiffs: list[Path], out_dir: Path) -> dict:
     success, failed, skipped, needs_picks = [], [], [], []
 
     for i, tiff in enumerate(tiffs, 1):
-        label = tiff.stem.split("-")[0]
+        tid = _tiff_id(tiff)
 
         if check_tiff_in_csv(tiff.name, cal_csv):
             skipped.append(tiff)
-            print(f"  [{i:>2}/{len(tiffs)}] {label}  [skip]")
+            print(f"  [{i:>2}/{len(tiffs)}]  {tid:>5}  [skip]")
             continue
 
         result = _run_step(CALIBRATE_SCRIPT, tiff)
 
         if result.returncode == 0:
             success.append(tiff)
-            # Count calibrated frames from stdout
-            cal_count = ""
+            # Parse frame count from "Frames in index: N  (complete: M)"
+            n_frames = 0
             for line in result.stdout.splitlines():
-                if "calibrated" in line.lower() or "frames" in line.lower():
-                    cal_count = line.strip()
-            print(f"  [{i:>2}/{len(tiffs)}] {label}  [ok]   {cal_count[:60]}")
+                if "Frames in index" in line:
+                    try:
+                        n_frames = int(line.split(":")[1].split("(")[0].strip())
+                    except (ValueError, IndexError):
+                        pass
+            print(f"  [{i:>2}/{len(tiffs)}]  {tid:>5}  [{n_frames:>3} fr]")
         elif "No reference-line pick" in (result.stderr + result.stdout):
             needs_picks.append(tiff)
-            print(f"  [{i:>2}/{len(tiffs)}] {label}  [NEED PICK] missing y_ref")
+            print(f"  [{i:>2}/{len(tiffs)}]  {tid:>5}  \033[33m[NEED PICK]\033[0m missing y_ref")
         else:
             err_line = (result.stderr + result.stdout).strip().split("\n")[-1]
             failed.append((tiff, err_line))
-            print(f"  [{i:>2}/{len(tiffs)}] {label}  [FAIL] {err_line[:80]}")
+            print(f"  [{i:>2}/{len(tiffs)}]  {tid:>5}  \033[31m[FAIL]\033[0m {err_line[:60]}")
 
     print(f"\n  Phase 3 summary: {len(success)} new, {len(skipped)} skipped, "
           f"{len(needs_picks)} need picks, {len(failed)} failed")
@@ -277,20 +285,18 @@ def analyze_phase3_results(flt: int, out_dir: Path):
         print(f"    Excluded frames: {n_excluded}")
 
 
-def _flag_bad_cbds(sub: pd.DataFrame) -> list[int]:
-    """Flag individual CBDs with suspicious MB detection within a TIFF.
+def _flag_bad_cbds(sub: pd.DataFrame, flt_xs_med: float) -> list[int]:
+    """Flag individual CBDs with geometric calibration problems within a TIFF.
+
+    Focuses on X-grid detection failures (affects h_ice accuracy).
+    MB power variation is NOT flagged — it is a known instrumental effect
+    corrected in phase 4 using per-frame mb_power as a gain reference.
 
     A frame is flagged if:
-      - mb_x deviates > 100 px from the TIFF median mb_x
-      - mb_power > 8 dB below the TIFF median (wrong feature picked)
-      - mb_power > -30 dB (suspiciously high — likely surface/bed, not MB)
+      - x_spacing_px deviates > 15 px from flight median (~7% error in TWT)
     """
-    mx_med = sub["mb_x"].median()
-    mp_med = sub["mb_power_dB"].median()
     bad = sub[
-        (sub["mb_x"] - mx_med).abs() > 100
-        | (sub["mb_power_dB"] < mp_med - 8)
-        | (sub["mb_power_dB"] > -30)
+        (sub["x_spacing_px"] - flt_xs_med).abs() > 15
     ]
     return sorted(bad["cbd"].dropna().astype(int).tolist())
 
@@ -307,9 +313,17 @@ def print_phase3_cbd_table(flt: int, out_dir: Path) -> tuple[list[int], dict[int
 
     df = pd.read_csv(cal_csv)
     df.columns = df.columns.str.strip()
+    # Ensure numeric types for flagging
+    for col in ("mb_x", "mb_power_dB", "x_spacing_px"):
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    # Flight-wide x_spacing median for outlier detection
+    _excl = df["exclude_reason"].fillna("").astype(str).str.strip()
+    _valid = df[_excl.isin(["", "nan"])].dropna(subset=["x_spacing_px"])
+    flt_xs_med = float(_valid["x_spacing_px"].median()) if len(_valid) > 0 else 205.0
 
     print(f"\n  TIFF -> CBD mapping (phase 3 calibration):")
-    print(f"  {'TIFF':>6}  {'CBD range':>14}  {'frames':>6}  {'mb_x med':>9}  {'mb_x std':>9}  "
+    print(f"  {'TIFF':>6}  {'CBD range':>14}  {'frames':>6}  {'x_sp med':>9}  {'x_sp std':>9}  "
           f"{'mb_pwr med':>10}  {'mb_pwr std':>10}  {'flag':>6}")
     print(f"  {'-'*85}")
 
@@ -322,33 +336,33 @@ def print_phase3_cbd_table(flt: int, out_dir: Path) -> tuple[list[int], dict[int
         cbds = sub["cbd"].dropna()
         cbd_lo = f"{cbds.min():04.0f}" if len(cbds) > 0 else "?"
         cbd_hi = f"{cbds.max():04.0f}" if len(cbds) > 0 else "?"
-        mx_med = sub["mb_x"].median()
-        mx_std = sub["mb_x"].std()
+        xs_med = sub["x_spacing_px"].median()
+        xs_std = sub["x_spacing_px"].std() if len(sub) > 1 else 0.0
         mp_med = sub["mb_power_dB"].median()
-        mp_std = sub["mb_power_dB"].std()
+        mp_std = sub["mb_power_dB"].std() if len(sub) > 1 else 0.0
 
+        # CHECK criteria: geometric calibration problems only.
+        # MB power variation is NOT flagged — it is a known instrumental
+        # effect (attenuator / CRT intensity) corrected in phase 4.
         flag = "GOOD"
         reason = ""
-        if mx_std > 100:
+        if xs_std > 10:
             flag = "CHECK"
-            reason = "mb_x varies > 100 px"
-        elif mp_std > 8:
+            reason = "x_spacing varies > 10 px within TIFF"
+        elif abs(xs_med - flt_xs_med) > 15:
             flag = "CHECK"
-            reason = "mb_power varies > 8 dB"
-        elif mp_med > -30:
-            flag = "CHECK"
-            reason = "mb_power suspiciously high (> -30 dB)"
+            reason = f"x_spacing median {xs_med:.0f} deviates from flight ({flt_xs_med:.0f})"
 
         if flag == "CHECK":
             check_tiffs.append(int(tid))
-            bad_cbds = _flag_bad_cbds(sub)
+            bad_cbds = _flag_bad_cbds(sub, flt_xs_med)
             check_details[int(tid)] = (reason, bad_cbds)
 
         if flag == "CHECK":
             flag_str = f"\033[1;31m{'CHECK':>6}\033[0m"
         else:
             flag_str = f"\033[32m{'GOOD':>6}\033[0m"
-        print(f"  {tid:6.0f}  {cbd_lo}–{cbd_hi:>4}  {n:6d}  {mx_med:9.0f}  {mx_std:9.0f}  "
+        print(f"  {tid:6.0f}  {cbd_lo}-{cbd_hi:>4}  {n:6d}  {xs_med:9.1f}  {xs_std:9.1f}  "
               f"{mp_med:10.1f}  {mp_std:10.1f}  {flag_str}")
 
     # Summary
@@ -404,11 +418,11 @@ def run_phase4(flt: int, tiffs: list[Path], out_dir: Path) -> dict:
     success, failed, skipped = [], [], []
 
     for i, tiff in enumerate(tiffs, 1):
-        label = tiff.stem.split("-")[0]
+        tid = _tiff_id(tiff)
 
         if check_tiff_in_csv(tiff.name, echo_csv):
             skipped.append(tiff)
-            print(f"  [{i:>2}/{len(tiffs)}] {label}  [skip]")
+            print(f"  [{i:>2}/{len(tiffs)}]  {tid:>5}  [skip]")
             continue
 
         result = _run_step(ECHOES_SCRIPT, tiff)
@@ -441,11 +455,11 @@ def run_phase4(flt: int, tiffs: list[Path], out_dir: Path) -> dict:
             if n_nosurf:
                 parts.append(f"\033[31m{n_nosurf} no_surface\033[0m")
             summary = ", ".join(parts) if parts else f"{n_frames} frames"
-            print(f"  [{i:>2}/{len(tiffs)}] {label}  [{n_frames:>3} fr]  {summary}")
+            print(f"  [{i:>2}/{len(tiffs)}]  {tid:>5}  [{n_frames:>3} fr]  {summary}")
         else:
             err_line = (result.stderr + result.stdout).strip().split("\n")[-1]
             failed.append((tiff, err_line))
-            print(f"  [{i:>2}/{len(tiffs)}] {label}  [FAIL] {err_line[:80]}")
+            print(f"  [{i:>2}/{len(tiffs)}]  {tid:>5}  \033[31m[FAIL]\033[0m {err_line[:60]}")
 
     print(f"\n  Phase 4 summary: {len(success)} new, {len(skipped)} skipped, {len(failed)} failed")
 
@@ -673,6 +687,13 @@ def main():
 
     # -- Phase 4: Echo Extraction -----------------------------------------
     if args.resume_from <= 4:
+        # If resuming from an earlier phase, the echoes CSV is stale (computed
+        # from old calibration).  Delete it so Phase 4 re-processes all TIFFs.
+        echo_csv = out_dir / "phase4" / f"F{flt}_echoes.csv"
+        if args.resume_from < 4 and echo_csv.exists():
+            echo_csv.unlink()
+            print(f"  Cleared stale {echo_csv.name} (re-running after Phase 3 update)")
+
         print(f"\n  {'='*55}")
         print(f"  PHASE 4: Echo Extraction")
         print(f"  {'='*55}\n")

@@ -3,15 +3,20 @@
 
 Usage:
     python tools/LYRA/validate_flight.py <flight_number>
+    python tools/LYRA/validate_flight.py --riggs-map
 
 Reads the Phase 4 echoes CSV for the given flight, compares against:
   - ASTRA manual picks on the same A-scope frames (d = 0; primary validation)
   - RIGGS ice thickness (independent seismic/radar; Bentley 1984)
   - BEDMAP1 SPRI (same-source, spatial context only)
 
+Standalone maps:
+  --riggs-map   Generate a map of all RIGGS stations on the Ross Ice Shelf
+
 Output:
     tools/LYRA/output/F{FLT}/validation/F{FLT}_validation.png
     tools/LYRA/output/F{FLT}/validation/F{FLT}_validation.json
+    tools/LYRA/output/RIGGS_stations_map.png  (--riggs-map)
 """
 
 from __future__ import annotations
@@ -40,7 +45,7 @@ from plot_flight_tracks import load_basemap_ps, _graticule_line, _meridian_line,
 REPO = Path(__file__).resolve().parent.parent.parent  # FrozenLegacies/
 NAV_DIR = REPO / "Navigation_Files"
 BEDMAP_SHP = REPO / "Data" / "BEDMAP" / "BedMap1" / "bedmap1_clip.shp"
-RIGGS_XLSX = REPO / "Data" / "RIGGS" / "RIGGS_H_Ice.xlsx"
+RIGGS_CSV = REPO / "Data" / "RIGGS" / "riggs_stations.csv"
 OUTPUT_BASE = Path(__file__).resolve().parent / "output"
 
 # -- Constants -----------------------------------------------------------------
@@ -186,30 +191,63 @@ def load_astra(flt: int) -> pd.DataFrame | None:
     return astra
 
 
+import re as _re
+
+def _parse_dms(s: str) -> float | None:
+    """Parse a DMS or DM coordinate string to decimal degrees.
+
+    Handles formats:
+        82 deg 32'19"S          (DMS with seconds)
+        84 deg 35.1'S           (DM with decimal minutes)
+        84 deg 28'S             (DM with integer minutes)
+    Returns negative for S/W hemispheres, None on parse failure.
+    """
+    if not s or not isinstance(s, str):
+        return None
+    s = s.strip().replace("\u00b0", " ").replace("''", '"')
+    m = _re.match(
+        r"(\d+)\s+(\d+(?:\.\d+)?)['\u2032]?\s*(?:(\d+(?:\.\d+)?)[\"'\u2033]?)?\s*([NSEW])",
+        s,
+    )
+    if not m:
+        return None
+    deg = float(m.group(1))
+    mins = float(m.group(2))
+    secs = float(m.group(3)) if m.group(3) else 0.0
+    dd = deg + mins / 60.0 + secs / 3600.0
+    if m.group(4) in ("S", "W"):
+        dd = -dd
+    return dd
+
+
 def load_riggs_stations() -> pd.DataFrame | None:
-    """Load RIGGS ice thickness stations (Bentley 1984, Table 5).
+    """Load RIGGS ice thickness stations from riggs_stations.csv.
 
     Uses seismic thickness where available (+/-10 m accuracy, Bamber &
     Bentley 1994), with RIGGS radar (35 MHz) as fallback.  Both are
     independent of SPRI 60 MHz.
 
     Returns DataFrame with: Station, h_ice, source, LAT_dd, LON_dd, x_ps, y_ps
-    or None if the XLSX is missing.
+    or None if the CSV is missing.
     """
-    if not RIGGS_XLSX.exists():
+    if not RIGGS_CSV.exists():
         return None
-    df = pd.read_excel(RIGGS_XLSX)
+    df = pd.read_csv(RIGGS_CSV)
 
-    # Convert NM/NR strings to NaN
-    for col in ["Radar_H_ice_m", "Seismic_H_ice_m"]:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
+    # Parse DMS/DM coordinates to decimal degrees
+    df["LAT_dd"] = df["Latitude"].apply(_parse_dms)
+    df["LON_dd"] = df["Longitude"].apply(_parse_dms)
+
+    # Convert ice thickness columns to numeric
+    df["h_radar"] = pd.to_numeric(df["h_i (radar), m"], errors="coerce")
+    df["h_seismic"] = pd.to_numeric(df["h_i (seismics), m"], errors="coerce")
 
     # Drop stations without coordinates
     df = df[df["LAT_dd"].notna() & df["LON_dd"].notna()].copy()
 
     # Prefer seismic, fall back to radar
-    df["h_ice"] = df["Seismic_H_ice_m"].fillna(df["Radar_H_ice_m"])
-    df["source"] = np.where(df["Seismic_H_ice_m"].notna(), "seismic", "radar")
+    df["h_ice"] = df["h_seismic"].fillna(df["h_radar"])
+    df["source"] = np.where(df["h_seismic"].notna(), "seismic", "radar")
     df = df[df["h_ice"].notna()].copy()
 
     # Project to polar stereographic
@@ -454,16 +492,117 @@ def _draw_inset_map(ax_map, nav, merged, status, riggs_df, spri_gdf, flt):
         spine.set_linewidth(0.6)
 
 
+# -- 1:1 scatter panel helper --------------------------------------------------
+
+ASTRA_COLOR = "#7570b3"  # purple (ColorBrewer Dark2)
+
+
+def _draw_1to1_panel(ax, ref_vals: np.ndarray, lyra_vals: np.ndarray,
+                     title: str, ref_label: str,
+                     color: str | np.ndarray = "#333333",
+                     marker: str = "o", size: float = 18,
+                     labels: list[str] | None = None,
+                     label_colors: list[str] | None = None,
+                     groups: dict | None = None):
+    """Draw a 1:1 scatter comparison on the given axes.
+
+    Parameters
+    ----------
+    groups : dict mapping group_name -> dict with keys
+        mask (bool array), color, marker, size, label
+        If provided, *color/marker/size* are ignored and each group
+        is plotted separately with its own legend entry.
+    labels : per-point text annotations (station names, CBDs, etc.)
+    label_colors : per-point annotation colors (defaults to *color*).
+    """
+    all_h = np.concatenate([ref_vals, lyra_vals])
+    finite = np.isfinite(all_h)
+    if not finite.any():
+        return
+    lo = max(0, float(np.nanmin(all_h[finite])) - 50)
+    hi = float(np.nanmax(all_h[finite])) + 50
+
+    # 1:1 line
+    ax.plot([lo, hi], [lo, hi], color="#999999", linewidth=0.8,
+            linestyle="--", zorder=1)
+
+    # Scatter
+    if groups:
+        for gname, g in groups.items():
+            m = g["mask"]
+            if not m.any():
+                continue
+            ax.scatter(ref_vals[m], lyra_vals[m], s=g.get("size", size),
+                       facecolors=g["color"], edgecolors="white",
+                       linewidths=0.4, marker=g.get("marker", "o"),
+                       zorder=3, label=g.get("label", gname))
+    else:
+        ax.scatter(ref_vals, lyra_vals, s=size, facecolors=color,
+                   edgecolors="white", linewidths=0.4, marker=marker,
+                   zorder=3)
+
+    # Per-point labels
+    if labels is not None:
+        for i, lbl in enumerate(labels):
+            if not lbl:
+                continue
+            clr = label_colors[i] if label_colors else (
+                color if isinstance(color, str) else "#333333")
+            ax.annotate(lbl, (ref_vals[i], lyra_vals[i]),
+                        textcoords="offset points", xytext=(4, 3),
+                        fontsize=5, color=clr, alpha=0.85,
+                        path_effects=[pe.withStroke(linewidth=1.2,
+                                                    foreground="white")])
+
+    ax.set_xlim(lo, hi)
+    ax.set_ylim(lo, hi)
+    ax.set_aspect("equal")
+    ax.set_xlabel(f"{ref_label} $h_{{ice}}$ (m)", fontsize=7)
+    ax.set_ylabel("LYRA $h_{ice}$ (m)", fontsize=7)
+    ax.set_title(title, fontsize=8, fontweight="bold", pad=4)
+
+    # Stats box
+    valid = np.isfinite(ref_vals) & np.isfinite(lyra_vals)
+    diff = lyra_vals[valid] - ref_vals[valid]
+    n = len(diff)
+    if n == 0:
+        return
+    bias = float(np.mean(diff))
+    rmse = float(np.sqrt(np.mean(diff ** 2)))
+    md = float(np.median(np.abs(diff)))
+    txt = (f"n = {n}\n"
+           f"bias = {bias:+.0f} m\n"
+           f"RMSE = {rmse:.0f} m\n"
+           f"|diff|$_{{50}}$ = {md:.0f} m")
+    if n >= 3:
+        r = float(np.corrcoef(ref_vals[valid], lyra_vals[valid])[0, 1])
+        txt += f"\nr = {r:.2f}"
+    ax.text(0.97, 0.03, txt, transform=ax.transAxes,
+            fontsize=6, va="bottom", ha="right",
+            bbox=dict(facecolor="white", edgecolor="#cccccc",
+                      pad=2.5, alpha=0.9))
+
+    if groups:
+        ax.legend(loc="upper left", fontsize=6, markerscale=0.8,
+                  handletextpad=0.3)
+
+    for spine in ax.spines.values():
+        spine.set_visible(True)
+        spine.set_linewidth(0.5)
+
+
 # -- Figure generation ---------------------------------------------------------
 
 def make_validation_figure(merged: pd.DataFrame, flt: int, out_path: Path,
                            nav: pd.DataFrame | None = None,
                            riggs_df: pd.DataFrame | None = None,
-                           spri_gdf: gpd.GeoDataFrame | None = None):
-    """Generate along-track validation figure with inset map.
+                           spri_gdf: gpd.GeoDataFrame | None = None,
+                           riggs_xover: pd.DataFrame | None = None):
+    """Generate validation figure: along-track + map + 1:1 scatter panels.
 
-    Main panel: Along-track ice thickness (LYRA vs RIGGS and BEDMAP1 SPRI).
-    Inset: Spatial map with flight track, RIGGS stations, BEDMAP1 SPRI.
+    Row 0: Along-track ice thickness | Spatial map
+    Row 1: 1:1 scatter panels (ASTRA, RIGGS crossover, BEDMAP1 SPRI)
+    Row 1 is only drawn when at least one comparison dataset has matches.
     """
 
     _setup_rcparams()
@@ -471,25 +610,63 @@ def make_validation_figure(merged: pd.DataFrame, flt: int, out_path: Path,
     cbd = merged["cbd"].values
     status = merged["echo_status"].values
     h_ice = merged["h_ice_m"].values
+    good = merged["echo_status"] == "good"
 
     # Count statistics
     counts = {st: int((status == st).sum()) for st in STATUS_ORDER}
 
-    # -- Layout: along-track panel + side map -----------------------------
+    # Determine which scatter panels to show
+    has_astra_scatter = ("h_ice_astra" in merged.columns
+                         and (good & merged["h_ice_astra"].notna()).any())
+    has_riggs_scatter = riggs_xover is not None and len(riggs_xover) > 0
+    has_spri_scatter = ("spri_ice" in merged.columns
+                        and (good & merged["spri_ice"].notna()).any())
+    scatter_panels = []
+    if has_astra_scatter:
+        scatter_panels.append("astra")
+    if has_riggs_scatter:
+        scatter_panels.append("riggs")
+    if has_spri_scatter:
+        scatter_panels.append("spri")
+    n_scatter = len(scatter_panels)
 
-    fig = plt.figure(figsize=(12, 4.5))
-    gs = fig.add_gridspec(1, 2, width_ratios=[1.8, 1], wspace=0.30,
-                          left=0.06, right=0.97, top=0.88, bottom=0.12)
-    ax_thk = fig.add_subplot(gs[0, 0])
+    # -- Layout ------------------------------------------------------------
+    if n_scatter > 0:
+        fig = plt.figure(figsize=(12, 8.5))
+        gs = fig.add_gridspec(2, max(3, n_scatter),
+                              height_ratios=[1.0, 0.85],
+                              width_ratios=[1.8, 1, 0.01]
+                              if n_scatter <= 2
+                              else [1] * max(3, n_scatter),
+                              wspace=0.35, hspace=0.38,
+                              left=0.06, right=0.97, top=0.93, bottom=0.06)
+        # Top row spans: along-track gets cols 0-1, map gets col 2
+        # But with 3+ scatter panels we need flexible columns
+        # Use nested gridspec for top row
+        gs_top = gs[0, :].subgridspec(1, 2, width_ratios=[1.8, 1],
+                                       wspace=0.30)
+        ax_thk = fig.add_subplot(gs_top[0, 0])
+        ax_map = fig.add_subplot(gs_top[0, 1])
 
-    # -- Main panel: Along-track ice thickness -----------------------------
+        # Bottom row: scatter panels evenly distributed
+        gs_bot = gs[1, :].subgridspec(1, 3, wspace=0.40)
+        scatter_axes = []
+        for i in range(n_scatter):
+            scatter_axes.append(fig.add_subplot(gs_bot[0, i]))
+    else:
+        fig = plt.figure(figsize=(12, 4.5))
+        gs = fig.add_gridspec(1, 2, width_ratios=[1.8, 1], wspace=0.30,
+                              left=0.06, right=0.97, top=0.88, bottom=0.12)
+        ax_thk = fig.add_subplot(gs[0, 0])
+        ax_map = fig.add_subplot(gs[0, 1])
 
-    # RIGGS (independent) — seismic vs radar distinction
+    # -- Top-left panel: Along-track ice thickness -------------------------
+
+    # RIGGS (independent) -- seismic vs radar distinction
     has_riggs = "riggs_ice" in merged.columns
     if has_riggs:
         rm = merged["riggs_ice"].notna()
         if rm.any():
-            # Split by source type
             has_source = "riggs_source" in merged.columns
             if has_source:
                 rm_seis = rm & (merged["riggs_source"] == "seismic")
@@ -498,13 +675,10 @@ def make_validation_figure(merged: pd.DataFrame, flt: int, out_path: Path,
                 rm_seis = rm
                 rm_radar = pd.Series(False, index=merged.index)
 
-            # Seismic RIGGS
             if rm_seis.any():
-                n_seis_pts = int(rm_seis.sum())
-                if "riggs_stn_idx" in merged.columns:
-                    n_seis_stns = int(merged.loc[rm_seis, "riggs_stn_idx"].nunique())
-                else:
-                    n_seis_stns = n_seis_pts
+                n_seis_stns = (int(merged.loc[rm_seis, "riggs_stn_idx"].nunique())
+                               if "riggs_stn_idx" in merged.columns
+                               else int(rm_seis.sum()))
                 md_seis = merged.loc[rm_seis, "riggs_dist"].median()
                 ax_thk.scatter(cbd[rm_seis], merged["riggs_ice"].values[rm_seis],
                                s=30, facecolors="none",
@@ -514,13 +688,10 @@ def make_validation_figure(merged: pd.DataFrame, flt: int, out_path: Path,
                                      f"{n_seis_stns}, "
                                      f"$\\tilde{{d}}$={md_seis/1000:.0f} km)")
 
-            # Radar RIGGS
             if rm_radar.any():
-                n_radar_pts = int(rm_radar.sum())
-                if "riggs_stn_idx" in merged.columns:
-                    n_radar_stns = int(merged.loc[rm_radar, "riggs_stn_idx"].nunique())
-                else:
-                    n_radar_stns = n_radar_pts
+                n_radar_stns = (int(merged.loc[rm_radar, "riggs_stn_idx"].nunique())
+                                if "riggs_stn_idx" in merged.columns
+                                else int(rm_radar.sum()))
                 md_radar = merged.loc[rm_radar, "riggs_dist"].median()
                 ax_thk.scatter(cbd[rm_radar],
                                merged["riggs_ice"].values[rm_radar],
@@ -531,7 +702,6 @@ def make_validation_figure(merged: pd.DataFrame, flt: int, out_path: Path,
                                      f"{n_radar_stns}, "
                                      f"$\\tilde{{d}}$={md_radar/1000:.0f} km)")
 
-            # Station name annotations (one per unique station)
             if ("riggs_stn_name" in merged.columns
                     and "riggs_stn_idx" in merged.columns):
                 labeled = set()
@@ -550,8 +720,8 @@ def make_validation_figure(merged: pd.DataFrame, flt: int, out_path: Path,
                         labeled.add(stn_idx)
 
     # BEDMAP1 SPRI (same-source, spatial context only)
-    has_spri = "spri_ice" in merged.columns
-    if has_spri:
+    has_spri_track = "spri_ice" in merged.columns
+    if has_spri_track:
         sm = merged["spri_ice"].notna()
         if sm.any():
             n_spri = int(sm.sum())
@@ -589,6 +759,7 @@ def make_validation_figure(merged: pd.DataFrame, flt: int, out_path: Path,
     ax_thk.set_xlabel("CBD number")
     ax_thk.legend(loc="upper right", markerscale=1.2, handletextpad=0.4,
                   fontsize=6.5)
+    _panel_label(ax_thk, "a")
 
     # -- Title -------------------------------------------------------------
 
@@ -596,23 +767,383 @@ def make_validation_figure(merged: pd.DataFrame, flt: int, out_path: Path,
     for st in STATUS_ORDER:
         if counts[st] > 0:
             subtitle_parts.append(f"{counts[st]} {STATUS_LABELS[st].lower()}")
-    # Center title and subtitle over the along-track panel
-    panel_center = (ax_thk.get_position().x0 + ax_thk.get_position().x1) / 2
-    fig.suptitle(f"F{flt} \u2014 Along-track validation",
-                 fontsize=10, fontweight="bold", y=0.99, x=panel_center)
-    fig.text(panel_center, 0.935, " | ".join(subtitle_parts),
+    fig.suptitle(f"F{flt} \u2014 Validation",
+                 fontsize=11, fontweight="bold", y=0.99)
+    fig.text(0.5, 0.955, " | ".join(subtitle_parts),
              ha="center", fontsize=7, color="#666666")
 
-    # -- Map panel ---------------------------------------------------------
+    # -- Top-right panel: Map ----------------------------------------------
 
-    ax_map = fig.add_subplot(gs[0, 1])
     _draw_inset_map(ax_map, nav, merged, status, riggs_df, spri_gdf, flt)
+    _panel_label(ax_map, "b")
+
+    # -- Bottom row: 1:1 scatter panels ------------------------------------
+
+    panel_idx = 0
+    panel_letter = ord("c")
+
+    if has_astra_scatter:
+        ax_a = scatter_axes[panel_idx]
+        both = merged[good & merged["h_ice_astra"].notna()
+                      & merged["h_ice_m"].notna()]
+        _draw_1to1_panel(
+            ax_a,
+            ref_vals=both["h_ice_astra"].values,
+            lyra_vals=both["h_ice_m"].values,
+            title=f"ASTRA (d = 0, n = {len(both)})",
+            ref_label="ASTRA",
+            color=ASTRA_COLOR, marker="o", size=14,
+        )
+        _panel_label(ax_a, chr(panel_letter))
+        panel_letter += 1
+        panel_idx += 1
+
+    if has_riggs_scatter:
+        ax_r = scatter_axes[panel_idx]
+        xo = riggs_xover
+        seis_mask = (xo["source"] == "seismic").values
+        radar_mask = ~seis_mask
+        stn_labels = [f"{r['station']} ({r['dist_m']/1000:.0f} km)"
+                      for _, r in xo.iterrows()]
+        lbl_colors = [RIGGS_SEIS_COLOR if s == "seismic" else RIGGS_RADAR_COLOR
+                      for s in xo["source"]]
+        n_s = int(seis_mask.sum())
+        n_r = int(radar_mask.sum())
+        groups = {}
+        if seis_mask.any():
+            groups["seis"] = {"mask": seis_mask, "color": RIGGS_SEIS_COLOR,
+                              "marker": "s", "size": 40,
+                              "label": f"Seismic (n={n_s})"}
+        if radar_mask.any():
+            groups["radar"] = {"mask": radar_mask, "color": RIGGS_RADAR_COLOR,
+                               "marker": "s", "size": 35,
+                               "label": f"Radar (n={n_r})"}
+        _draw_1to1_panel(
+            ax_r,
+            ref_vals=xo["h_riggs"].values,
+            lyra_vals=xo["h_lyra"].values,
+            title=f"RIGGS crossover (n = {len(xo)} stn)",
+            ref_label="RIGGS",
+            groups=groups,
+            labels=stn_labels, label_colors=lbl_colors,
+        )
+        _panel_label(ax_r, chr(panel_letter))
+        panel_letter += 1
+        panel_idx += 1
+
+    if has_spri_scatter:
+        ax_s = scatter_axes[panel_idx]
+        both = merged[good & merged["spri_ice"].notna()
+                      & merged["h_ice_m"].notna()]
+        _draw_1to1_panel(
+            ax_s,
+            ref_vals=both["spri_ice"].values,
+            lyra_vals=both["h_ice_m"].values,
+            title=f"BEDMAP1 SPRI (same-source, n = {len(both)})",
+            ref_label="BEDMAP1",
+            color=SPRI_COLOR, marker="D", size=12,
+        )
+        _panel_label(ax_s, chr(panel_letter))
+        panel_idx += 1
 
     # Save
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path)
     plt.close(fig)
     print(f"  Validation figure \u2192 {out_path}")
+
+
+# -- Standalone RIGGS map ------------------------------------------------------
+
+def plot_riggs_stations(out_path: Path | None = None) -> Path:
+    """Generate a standalone map of all RIGGS stations on the Ross Ice Shelf.
+
+    Stations colored by measurement source: red squares = seismic,
+    orange squares = radar.  Station names labeled next to each marker.
+
+    Returns the output path.
+    """
+    _setup_rcparams()
+
+    riggs_df = load_riggs_stations()
+    if riggs_df is None or len(riggs_df) == 0:
+        sys.exit("No RIGGS stations found in " + str(RIGGS_CSV))
+
+    if out_path is None:
+        out_path = OUTPUT_BASE / "RIGGS_stations_map.png"
+
+    n_seis = int((riggs_df["source"] == "seismic").sum())
+    n_radar = int((riggs_df["source"] == "radar").sum())
+    print(f"  {len(riggs_df)} RIGGS stations ({n_seis} seismic, {n_radar} radar)")
+
+    fig, ax = plt.subplots(figsize=(10, 10))
+
+    # Basemap
+    land = load_basemap_ps()
+    land.plot(ax=ax, color="#e4eef5", edgecolor="#7aadbb",
+              linewidth=0.4, zorder=1)
+
+    # Map extent: Ross Ice Shelf region (~75-85S, 150E-150W i.e. 150-210E)
+    # Convert corner coordinates to PS
+    corner_lons = [150, 210, 150, 210, 180, 180, 150, 210]
+    corner_lats = [-75, -75, -85, -85, -75, -85, -80, -80]
+    cx, cy = _TRANSFORM.transform(corner_lons, corner_lats)
+    margin = 100_000
+    x_lim = (min(cx) - margin, max(cx) + margin)
+    y_lim = (min(cy) - margin, max(cy) + margin)
+    ax.set_xlim(*x_lim)
+    ax.set_ylim(*y_lim)
+
+    # Graticules
+    lon_arr = np.linspace(-180, 180, 721)
+    lat_arr = np.linspace(-90, -60, 200)
+    for lat in range(-85, -74):
+        lx, ly = _graticule_line(lon_arr, lat)
+        ax.plot(lx, ly, color="#cccccc", linewidth=0.3,
+                zorder=0, linestyle="--")
+    for lon in range(-180, 181, 10):
+        lx, ly = _meridian_line(lat_arr, lon)
+        ax.plot(lx, ly, color="#cccccc", linewidth=0.3,
+                zorder=0, linestyle=":")
+
+    # Graticule labels
+    for lat in range(-85, -74, 2):
+        gx, gy = _TRANSFORM.transform(np.array([180.0]), np.array([float(lat)]))
+        if x_lim[0] < gx[0] < x_lim[1] and y_lim[0] < gy[0] < y_lim[1]:
+            ax.text(gx[0], gy[0], f"{abs(lat)}S",
+                    fontsize=6, color="#999999", ha="left", va="bottom",
+                    path_effects=[pe.withStroke(linewidth=1.5,
+                                                foreground="white")])
+    for lon in range(150, 220, 10):
+        disp_lon = lon if lon <= 180 else lon - 360
+        label = f"{abs(disp_lon)}{'E' if disp_lon >= 0 else 'W'}"
+        gx, gy = _TRANSFORM.transform(np.array([float(disp_lon)]),
+                                       np.array([-75.0]))
+        if x_lim[0] < gx[0] < x_lim[1] and y_lim[0] < gy[0] < y_lim[1]:
+            ax.text(gx[0], gy[0], label,
+                    fontsize=6, color="#999999", ha="center", va="bottom",
+                    path_effects=[pe.withStroke(linewidth=1.5,
+                                                foreground="white")])
+
+    # Plot stations by source
+    seis = riggs_df[riggs_df["source"] == "seismic"]
+    radar = riggs_df[riggs_df["source"] == "radar"]
+
+    if len(seis) > 0:
+        ax.scatter(seis["x_ps"].values, seis["y_ps"].values,
+                   s=40, facecolors=RIGGS_SEIS_COLOR,
+                   edgecolors="white", linewidths=0.5, marker="s",
+                   zorder=5, label=f"Seismic ({n_seis})")
+    if len(radar) > 0:
+        ax.scatter(radar["x_ps"].values, radar["y_ps"].values,
+                   s=35, facecolors=RIGGS_RADAR_COLOR,
+                   edgecolors="white", linewidths=0.5, marker="s",
+                   zorder=4, label=f"Radar ({n_radar})")
+
+    # Station name labels
+    for _, row in riggs_df.iterrows():
+        clr = (RIGGS_SEIS_COLOR if row["source"] == "seismic"
+               else RIGGS_RADAR_COLOR)
+        ax.annotate(row["Station"],
+                    (row["x_ps"], row["y_ps"]),
+                    textcoords="offset points", xytext=(5, 3),
+                    fontsize=4.5, color=clr, alpha=0.85,
+                    path_effects=[pe.withStroke(linewidth=1.2,
+                                                foreground="white")])
+
+    # Geographic labels
+    for lon, lat, text, fs in [
+        (-155, -79.5, "Ross Ice\nShelf", 9),
+        (-130, -80.5, "Siple Coast", 7),
+        (170, -78.5, "Ross Sea", 7),
+        (170, -77.5, "McMurdo\nSound", 6),
+        (-150, -85, "South", 6),
+    ]:
+        gx, gy = _TRANSFORM.transform(np.array([lon]), np.array([lat]))
+        if x_lim[0] < gx[0] < x_lim[1] and y_lim[0] < gy[0] < y_lim[1]:
+            ax.text(gx[0], gy[0], text, fontsize=fs, color="#557799",
+                    ha="center", va="center", fontstyle="italic",
+                    zorder=7,
+                    path_effects=[pe.withStroke(linewidth=2,
+                                                foreground="white")])
+
+    # Scale bar
+    sb_len = 200_000  # 200 km
+    sb_x0 = x_lim[0] + 0.06 * (x_lim[1] - x_lim[0])
+    sb_y0 = y_lim[0] + 0.05 * (y_lim[1] - y_lim[0])
+    ax.plot([sb_x0, sb_x0 + sb_len], [sb_y0, sb_y0],
+            color="k", linewidth=1.5, solid_capstyle="butt", zorder=8)
+    for xv in [sb_x0, sb_x0 + sb_len]:
+        ax.plot([xv, xv], [sb_y0 - 12_000, sb_y0 + 12_000],
+                color="k", linewidth=1, zorder=8)
+    ax.text(sb_x0 + sb_len / 2, sb_y0 + 20_000, "200 km",
+            fontsize=7, ha="center", va="bottom")
+
+    # Axes formatting
+    ax.set_aspect("equal")
+    ax.legend(loc="upper left", fontsize=8, markerscale=1.0,
+              framealpha=0.9, edgecolor="#cccccc")
+
+    def _m2km(x, _pos=None):
+        return f"{x / 1e3:.0f}"
+    ax.xaxis.set_major_formatter(FuncFormatter(_m2km))
+    ax.yaxis.set_major_formatter(FuncFormatter(_m2km))
+    ax.tick_params(labelsize=7, direction="in", pad=2)
+    ax.set_xlabel("PS easting (km)", fontsize=9)
+    ax.set_ylabel("PS northing (km)", fontsize=9)
+
+    for spine in ax.spines.values():
+        spine.set_visible(True)
+        spine.set_linewidth(0.6)
+
+    fig.suptitle("RIGGS stations -- Ross Ice Shelf",
+                 fontsize=12, fontweight="bold", y=0.95)
+    fig.text(0.5, 0.91,
+             f"{len(riggs_df)} stations (Bentley 1984; "
+             f"{n_seis} seismic, {n_radar} radar)",
+             ha="center", fontsize=8, color="#666666")
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path)
+    plt.close(fig)
+    print(f"  RIGGS station map -> {out_path}")
+    return out_path
+
+
+# -- RIGGS crossover analysis --------------------------------------------------
+
+def riggs_crossover(merged: pd.DataFrame, riggs_df: pd.DataFrame,
+                    radius_m: float = MATCH_RADIUS_M
+                    ) -> pd.DataFrame | None:
+    """Per-station RIGGS crossover: nearest good LYRA frame per station.
+
+    For each RIGGS station within *radius_m* of the flight, finds the single
+    nearest LYRA good-echo frame and extracts its h_ice.
+
+    Returns a DataFrame with one row per matched station:
+        station, source, h_riggs, h_lyra, dist_m, cbd, lat, lon
+    or None if no matches.
+    """
+    good = merged[(merged["echo_status"] == "good")
+                  & merged["LAT"].notna() & merged["LON"].notna()].copy()
+    if len(good) == 0 or riggs_df is None or len(riggs_df) == 0:
+        return None
+
+    # Project good-echo frames to PS
+    gx, gy = _TRANSFORM.transform(good["LON"].values, good["LAT"].values)
+    good_xy = np.column_stack([gx, gy])
+
+    rows = []
+    for idx, stn in riggs_df.iterrows():
+        stn_xy = np.array([[stn["x_ps"], stn["y_ps"]]])
+        dists = np.sqrt(((good_xy - stn_xy) ** 2).sum(axis=1))
+        nearest = int(np.argmin(dists))
+        d = dists[nearest]
+        if d > radius_m:
+            continue
+        frame = good.iloc[nearest]
+        rows.append({
+            "station": stn["Station"],
+            "source": stn["source"],
+            "h_riggs": float(stn["h_ice"]),
+            "h_lyra": float(frame["h_ice_m"]),
+            "dist_m": round(float(d), 0),
+            "cbd": int(frame["cbd"]),
+            "lat": float(frame["LAT"]),
+            "lon": float(frame["LON"]),
+        })
+
+    if not rows:
+        return None
+    return pd.DataFrame(rows)
+
+
+def plot_riggs_crossover(xover: pd.DataFrame, flt: int, out_path: Path):
+    """1:1 scatter plot of RIGGS vs LYRA ice thickness at crossover stations."""
+    _setup_rcparams()
+
+    fig, ax = plt.subplots(figsize=(5.5, 5.5))
+
+    seis = xover[xover["source"] == "seismic"]
+    radar = xover[xover["source"] == "radar"]
+
+    # 1:1 line
+    all_h = np.concatenate([xover["h_riggs"].values, xover["h_lyra"].values])
+    lo, hi = float(np.min(all_h)) - 50, float(np.max(all_h)) + 50
+    lo = max(0, lo)
+    ax.plot([lo, hi], [lo, hi], color="#999999", linewidth=0.8,
+            linestyle="--", zorder=1, label="1:1")
+
+    # Scatter by source
+    if len(seis) > 0:
+        ax.scatter(seis["h_riggs"], seis["h_lyra"], s=50,
+                   facecolors=RIGGS_SEIS_COLOR, edgecolors="white",
+                   linewidths=0.5, marker="s", zorder=4,
+                   label=f"Seismic (n={len(seis)})")
+    if len(radar) > 0:
+        ax.scatter(radar["h_riggs"], radar["h_lyra"], s=45,
+                   facecolors=RIGGS_RADAR_COLOR, edgecolors="white",
+                   linewidths=0.5, marker="s", zorder=3,
+                   label=f"Radar (n={len(radar)})")
+
+    # Station name annotations
+    for _, row in xover.iterrows():
+        clr = (RIGGS_SEIS_COLOR if row["source"] == "seismic"
+               else RIGGS_RADAR_COLOR)
+        ax.annotate(f"{row['station']} ({row['dist_m']/1000:.0f} km)",
+                    (row["h_riggs"], row["h_lyra"]),
+                    textcoords="offset points", xytext=(5, 4),
+                    fontsize=5.5, color=clr, alpha=0.85,
+                    path_effects=[pe.withStroke(linewidth=1.2,
+                                                foreground="white")])
+
+    ax.set_xlim(lo, hi)
+    ax.set_ylim(lo, hi)
+    ax.set_aspect("equal")
+    ax.set_xlabel("RIGGS $h_{ice}$ (m)")
+    ax.set_ylabel("LYRA $h_{ice}$ (m)")
+    ax.legend(loc="upper left", fontsize=7)
+
+    # Stats annotation
+    diff = xover["h_lyra"].values - xover["h_riggs"].values
+    n = len(diff)
+    bias = float(np.mean(diff))
+    rmse = float(np.sqrt(np.mean(diff ** 2)))
+    md = float(np.median(np.abs(diff)))
+    stats_text = (f"n = {n} stations\n"
+                  f"bias = {bias:+.0f} m\n"
+                  f"RMSE = {rmse:.0f} m\n"
+                  f"|diff|$_{{50}}$ = {md:.0f} m")
+    if n >= 3:
+        r = float(np.corrcoef(xover["h_riggs"], xover["h_lyra"])[0, 1])
+        stats_text += f"\nr = {r:.2f}"
+    ax.text(0.97, 0.03, stats_text, transform=ax.transAxes,
+            fontsize=7, va="bottom", ha="right",
+            bbox=dict(facecolor="white", edgecolor="#cccccc",
+                      pad=3, alpha=0.9))
+
+    # Separate stats for seismic only
+    if len(seis) >= 2:
+        sd = seis["h_lyra"].values - seis["h_riggs"].values
+        seis_text = (f"Seismic only (n={len(seis)}):\n"
+                     f"  bias = {np.mean(sd):+.0f} m, "
+                     f"RMSE = {np.sqrt(np.mean(sd**2)):.0f} m")
+        ax.text(0.03, 0.97, seis_text, transform=ax.transAxes,
+                fontsize=6, va="top", ha="left", color=RIGGS_SEIS_COLOR,
+                bbox=dict(facecolor="white", edgecolor="#cccccc",
+                          pad=2, alpha=0.85))
+
+    fig.suptitle(f"F{flt} -- RIGGS crossover validation",
+                 fontsize=10, fontweight="bold")
+    fig.text(0.5, 0.91,
+             "Nearest good LYRA echo per RIGGS station "
+             f"(max {MATCH_RADIUS_M/1000:.0f} km)",
+             ha="center", fontsize=7, color="#666666")
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path)
+    plt.close(fig)
+    print(f"  RIGGS crossover figure -> {out_path}")
 
 
 # -- Main ----------------------------------------------------------------------
@@ -636,11 +1167,23 @@ def _comparison_stats(lyra_vals: np.ndarray, ref_vals: np.ndarray) -> dict:
 def main():
     parser = argparse.ArgumentParser(
         description="LYRA Phase 5 validation with BEDMAP1 comparison")
-    parser.add_argument("flight", type=int, help="Flight number (e.g. 126)")
+    parser.add_argument("flight", type=int, nargs="?", default=None,
+                        help="Flight number (e.g. 126)")
     parser.add_argument("--radius", type=float, default=MATCH_RADIUS_M,
                         help=f"BEDMAP1 match radius in metres "
                              f"(default {MATCH_RADIUS_M})")
+    parser.add_argument("--riggs-map", action="store_true",
+                        help="Generate standalone RIGGS station map and exit")
     args = parser.parse_args()
+
+    # -- Standalone RIGGS map mode -----------------------------------------
+    if args.riggs_map:
+        print("RIGGS station map")
+        plot_riggs_stations()
+        return
+
+    if args.flight is None:
+        parser.error("flight number is required (or use --riggs-map)")
 
     flt = args.flight
     report: dict = {"flight": flt, "match_radius_km": args.radius / 1000}
@@ -801,7 +1344,7 @@ def main():
             "stations": riggs_stations,
         }
     elif riggs_df is None:
-        print("    RIGGS_H_Ice.xlsx not found")
+        print("    riggs_stations.csv not found")
         report["riggs"] = None
     else:
         print("    No coordinates available for RIGGS matching")
@@ -863,12 +1406,51 @@ def main():
         if report.get("riggs") is not None:
             report["riggs"]["stations_in_map_region"] = len(riggs_df_map)
 
+    # -- RIGGS crossover (per-station nearest good echo) ------------------
+    xover = riggs_crossover(merged, riggs_df, radius_m=args.radius)
+    if xover is not None and len(xover) > 0:
+        print(f"\n  RIGGS crossover: {len(xover)} stations matched")
+        for _, row in xover.iterrows():
+            d_km = row["dist_m"] / 1000
+            diff = row["h_lyra"] - row["h_riggs"]
+            print(f"    {row['station']:8s}  RIGGS {row['h_riggs']:.0f} m  "
+                  f"LYRA {row['h_lyra']:.0f} m  "
+                  f"diff {diff:+.0f} m  d={d_km:.1f} km  ({row['source']})")
+
+        # Crossover stats for JSON report
+        diff_x = xover["h_lyra"].values - xover["h_riggs"].values
+        xover_stats = {
+            "n_stations": len(xover),
+            "bias_m": round(float(np.mean(diff_x)), 1),
+            "rmse_m": round(float(np.sqrt(np.mean(diff_x ** 2))), 1),
+            "median_abs_diff_m": round(float(np.median(np.abs(diff_x))), 1),
+        }
+        if len(xover) >= 3:
+            xover_stats["r"] = round(
+                float(np.corrcoef(xover["h_riggs"], xover["h_lyra"])[0, 1]), 3)
+        seis_x = xover[xover["source"] == "seismic"]
+        if len(seis_x) >= 2:
+            sd = seis_x["h_lyra"].values - seis_x["h_riggs"].values
+            xover_stats["seismic_only"] = {
+                "n": len(seis_x),
+                "bias_m": round(float(np.mean(sd)), 1),
+                "rmse_m": round(float(np.sqrt(np.mean(sd ** 2))), 1),
+            }
+        xover_stats["stations"] = xover.to_dict(orient="records")
+        if report.get("riggs") is None:
+            report["riggs"] = {}
+        report["riggs"]["crossover"] = xover_stats
+    else:
+        xover = None
+        print("\n  No RIGGS crossover stations matched")
+
     # -- Generate figure ---------------------------------------------------
     out_path = OUTPUT_BASE / f"F{flt}" / "validation" / f"F{flt}_validation.png"
     print("  Generating validation figure ...")
     make_validation_figure(merged, flt, out_path,
                            nav=nav, riggs_df=riggs_df_map,
-                           spri_gdf=spri_gdf_map)
+                           spri_gdf=spri_gdf_map,
+                           riggs_xover=xover)
 
     # -- Comparison statistics ---------------------------------------------
     good = merged[merged["echo_status"] == "good"]

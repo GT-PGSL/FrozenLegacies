@@ -168,7 +168,7 @@ def classify_digit(densities, threshold):
 
     threshold: float (global) or dict {seg_name: float} (per-segment).
 
-    Hybrid approach:
+    Approach:
     1. Threshold densities -> binary segment vector
     2. Compute Hamming distance to each digit's truth pattern
     3. Among candidates with minimum Hamming distance, use MSE as tiebreaker

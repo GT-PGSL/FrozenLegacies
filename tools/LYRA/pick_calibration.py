@@ -142,9 +142,12 @@ def build_tiff_queue(args) -> tuple[list[Path], int, Path]:
         canonical = [t for t in all_tiffs if "_" in t.stem and t.stem[0].isdigit()]
 
         if args.tiff is not None:
-            # Single TIFF by ID
+            # Single TIFF by ID — exact match (compare as integers to handle
+            # zero-padding: --tiff 25 matches tiff_id "0025")
+            target_id = int(args.tiff)
             matches = [t for t in canonical
-                       if str(args.tiff) in lyra_tiff_id(t)]
+                       if lyra_tiff_id(t).lstrip("0") == str(target_id)
+                       or (target_id == 0 and lyra_tiff_id(t).lstrip("0") == "")]
             if not matches:
                 sys.exit(f"ERROR: No TIFF matching ID {args.tiff} in {raw_dir}")
             return [ensure_canonical_name(matches[0])], flt, out_dir
@@ -352,6 +355,10 @@ def pick_one_tiff(tiff_path: Path, flt: int, all_picks: dict,
         }
 
         # -- Build figure --------------------------------------------------
+        # Disable matplotlib default keybindings that conflict with our keys
+        for param in list(plt.rcParams):
+            if param.startswith("keymap."):
+                plt.rcParams[param] = []
         fig, ax = plt.subplots(figsize=(16, 8))
         fig.patch.set_facecolor("white")
 

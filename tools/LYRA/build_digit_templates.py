@@ -248,7 +248,8 @@ def recognize_frame(frame_crop, H, fw, templates):
     return recognized, blobs
 
 
-def apply_sequential_constraint(frame_indices, raw_reads, flight=None):
+def apply_sequential_constraint(frame_indices, raw_reads, flight=None,
+                                confidences=None):
     """
     Use the physical constraint |CBD[n+1] - CBD[n]| = 1 to validate and
     correct NCC recognition results.
@@ -265,6 +266,11 @@ def apply_sequential_constraint(frame_indices, raw_reads, flight=None):
         majority-voting across OCR reads.  This eliminates a common failure
         mode where the flight digits are misread (e.g. "025" instead of "125"),
         which prevents correct CBD anchoring.
+    confidences : list[float] or None
+        Per-frame confidence scores (0.0-1.0).  When provided, anchor
+        agreement is weighted by confidence instead of binary counting.
+        Frames with confidence < 0.3 are excluded as candidate anchors.
+        When None (default), all valid anchors are weighted equally (1.0).
 
     Returns
     -------
@@ -297,14 +303,22 @@ def apply_sequential_constraint(frame_indices, raw_reads, flight=None):
         flt_str = max(flt_votes, key=flt_votes.get) if flt_votes else f"{FLIGHT:03d}"
 
     # valid = list of (list_pos, frame_idx, cbd_int)
-    valid = [(k, fi, cbd)
-             for k, (fi, cbd) in enumerate(zip(frame_indices, raw_cbds))
-             if cbd is not None]
+    # When confidences are provided, filter out low-confidence anchors
+    conf_threshold = 0.3
+    valid = []
+    for k, (fi, cbd) in enumerate(zip(frame_indices, raw_cbds)):
+        if cbd is None:
+            continue
+        if confidences is not None and confidences[k] < conf_threshold:
+            continue
+        valid.append((k, fi, cbd))
 
     if len(valid) < 2:
         return raw_reads, len(valid)
 
     # Try both directions (+1 ascending, -1 descending); find best anchor
+    # When confidences are provided, weight each agreeing anchor by its
+    # confidence instead of counting each as 1.
     best_score        = 0
     best_anchor_fi    = frame_indices[0]
     best_anchor_cbd   = raw_cbds[0] if raw_cbds[0] is not None else 0
@@ -313,7 +327,8 @@ def apply_sequential_constraint(frame_indices, raw_reads, flight=None):
     for direction in (+1, -1):
         for _, anchor_fi, anchor_cbd in valid:
             score = sum(
-                1 for _, fi, cbd in valid
+                (confidences[k] if confidences is not None else 1)
+                for k, fi, cbd in valid
                 if cbd == anchor_cbd + direction * (fi - anchor_fi)
             )
             if score > best_score:
@@ -322,13 +337,19 @@ def apply_sequential_constraint(frame_indices, raw_reads, flight=None):
                 best_anchor_cbd = anchor_cbd
                 best_direction  = direction
 
+    # Count integer anchors for reporting (how many frames agreed)
+    n_anchors = sum(
+        1 for _, fi, cbd in valid
+        if cbd == best_anchor_cbd + best_direction * (fi - best_anchor_fi)
+    )
+
     # Assign corrected CBD to every complete frame
     corrected = []
     for fi in frame_indices:
         expected_cbd = best_anchor_cbd + best_direction * (fi - best_anchor_fi)
         corrected.append(f"{flt_str}{expected_cbd:04d}")
 
-    return corrected, best_score
+    return corrected, n_anchors
 
 
 # -- Main --------------------------------------------------------------------

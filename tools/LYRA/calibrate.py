@@ -69,6 +69,7 @@ from lyra import (
     DEFAULT_CAL, detect_frames, extract_trace,
     detect_mb, detect_frame_calibration, px_to_db,
     _gauss_smooth, ensure_canonical_name, resolve_tiff_arg, tiff_id,
+    detect_signal_extent,
 )
 
 # -- Resolve TIFF path ----------------------------------------------------------
@@ -208,6 +209,10 @@ if raw_picks:
         print(f"  MB estimate   : {tiff_mb_estimate:.0f} px  "
               f"(flight-wide median of {len(_all_mbs)} guided MB pick(s))")
 
+# Per-frame MB estimates from CRT sweep start (sig_start).
+# Populated after TIFF image is loaded; used by _build_guides().
+sig_mb_by_fkey: dict = {}
+
 # -- Identify tiff-level anchor -------------------------------------------------
 # If any complete frame in this TIFF already has picks (e.g. collected by
 # pick_calibration.py with Q after frame 0), propagate only its REF (y_ref_px)
@@ -304,6 +309,7 @@ def _build_guides(fkey: str) -> dict:
     per_frame = raw_picks.get(fkey, {})
     if per_frame.get("mb") is not None:
         g["mb"] = int(per_frame["mb"])
+        g["mb_is_pick"] = True   # explicit user pick — trust it in detect_mb
     if per_frame.get("ref") is not None:
         g["ref"] = int(per_frame["ref"])
     if per_frame.get("x_grid"):
@@ -311,10 +317,12 @@ def _build_guides(fkey: str) -> dict:
     # Tiff anchor: propagate ref only if not already set from per-frame pick
     if "ref" not in g and tiff_anchor.get("ref") is not None:
         g["ref"] = int(tiff_anchor["ref"])
-    # MB estimate: soft guide for unguided frames derived from guided-frame median.
-    # Only propagated when no per-frame MB pick is available.  Guides detect_mb's
-    # GUIDED path to the correct search window (e.g. F141 MB ~540 px vs default 800).
-    if "mb" not in g and tiff_mb_estimate is not None:
+    # MB estimate: soft guide for unguided frames.
+    # Priority: per-frame sig_start-based estimate (adapts to film frame boundary
+    # shifts) -> tiff_mb_estimate (median of guided-frame MB picks).
+    if "mb" not in g and fkey in sig_mb_by_fkey:
+        g["mb"] = int(round(sig_mb_by_fkey[fkey]))
+    elif "mb" not in g and tiff_mb_estimate is not None:
         g["mb"] = int(round(tiff_mb_estimate))
     # D_anchor: propagate to frames without per-frame x_grid picks (Priority A2)
     if "x_grid" not in g and tiff_d_anchor is not None:
@@ -328,7 +336,67 @@ Image.MAX_IMAGE_PIXELS = None
 img      = np.array(Image.open(TIFF), dtype=np.float32)
 img_norm = (img - img.min()) / (img.max() - img.min() + 1e-9)
 H, W     = img_norm.shape
-print(f"  Image  : {W} × {H} px\n")
+print(f"  Image  : {W} x {H} px")
+
+# -- Hybrid sig_start-based MB guide -------------------------------------------
+# The CRT sweep start (sig_start) is time-locked to the oscilloscope trigger,
+# so D_mb = mb_x - sig_start is constant within a TIFF even when film frame
+# boundaries shift.  Per-frame sig_start + median(D_mb) gives a more robust MB
+# guide than tiff_mb_estimate for TIFFs with shifting frame boundaries.
+#
+# Robustness: some frames have faint/absent PRF timing pulses, causing sig_start
+# to jump ~400+ px (landing on MB instead of the sweep start).  We use
+# median(sig_start) as a robust reference and only trust frames whose sig_start
+# is within 50 px of the median.  Outlier frames fall back to tiff_mb_estimate.
+if raw_picks:
+    _sig_starts: dict = {}   # fkey -> sig_start (px)
+    for _, _r in tiff_rows.iterrows():
+        if _r["frame_type"] != "complete":
+            continue
+        _cbd = _r["cbd"] if _r["cbd"] and str(_r["cbd"]) not in ("nan", "") else None
+        _fk  = f"CBD{_cbd}" if _cbd else f"fr{_r['frame_idx']}"
+        if raw_picks.get(_fk, {}).get("exclude"):
+            continue
+        _left  = int(_r["left_px"])
+        _right = int(_r["right_px"])
+        _frame = img_norm[:, _left : _right + 1]
+        try:
+            _ss, _ = detect_signal_extent(_frame, DEFAULT_CAL)
+            _sig_starts[_fk] = _ss
+        except Exception:
+            pass
+
+    if _sig_starts:
+        _ss_arr    = np.array(list(_sig_starts.values()))
+        _median_ss = float(np.median(_ss_arr))
+
+        # D_mb from guided frames with stable sig_start (within 50 px of median)
+        _d_mb_vals = []
+        for _fk, _ss in _sig_starts.items():
+            if abs(_ss - _median_ss) > 50:
+                continue   # outlier sig_start — skip
+            _pp = raw_picks.get(_fk, {})
+            if (_pp.get("mb") is not None and not _pp.get("exclude")
+                    and float(_pp["mb"]) > 200):
+                _d_mb_vals.append(float(_pp["mb"]) - _ss)
+
+        if _d_mb_vals:
+            _med_d = float(np.median(_d_mb_vals))
+            for _fk, _ss in _sig_starts.items():
+                if abs(_ss - _median_ss) <= 50:   # stable sig_start
+                    sig_mb_by_fkey[_fk] = _ss + _med_d
+            _n_stable = len(sig_mb_by_fkey)
+            _n_total  = len(_sig_starts)
+            print(f"  Sig-start MB  : {_n_stable}/{_n_total} frames  "
+                  f"(median sig_start={_median_ss:.0f} px,  "
+                  f"median D_mb={_med_d:.0f} px)")
+        else:
+            print(f"  Sig-start MB  : INACTIVE  (no guided MB picks with stable sig_start)")
+    else:
+        print(f"  Sig-start MB  : INACTIVE  (no sig_start could be computed)")
+else:
+    print(f"  Sig-start MB  : INACTIVE  (no guide picks)")
+print()
 
 # -- Pass 1: calibrate all frames -----------------------------------------------
 # Collect (frame_idx -> data dict) for quality gate and figure generation.
@@ -562,9 +630,94 @@ if cal_rows:
         merged = new_df.astype(str)
     merged.to_csv(CAL_CSV, index=False)
     print(f"\n  Calibration CSV -> {CAL_CSV.relative_to(ROOT)}")
-    print(f"  Step 2 figures  -> {STEP2_DIR.relative_to(ROOT)}/")
+    print(f"  Phase 3 figures -> {PHASE3_DIR.relative_to(ROOT)}/")
     print(f"  Total cal rows  : {len(merged)}")
     n_guided = sum(1 for r in cal_rows if r["had_guide"])
     print(f"  Frames with guide: {n_guided}/{len(cal_rows)}")
+
+# -- Generate calibration review JSON ------------------------------------------
+# Reads the full flight cal CSV and flags CHECK TIFFs / frames.
+# Updated after every TIFF run so the user always has a current overview.
+REVIEW_JSON = PHASE3_DIR / f"F{FLT}_cal_review.json"
+
+if CAL_CSV.exists():
+    _review_df = pd.read_csv(CAL_CSV)
+    _review_df.columns = _review_df.columns.str.strip()
+
+    # Filter to calibrated (non-excluded) frames with valid x_spacing
+    _excl = _review_df["exclude_reason"].fillna("").astype(str).str.strip()
+    _cal_df = _review_df[_excl == ""].copy()
+    _cal_df["x_spacing_px"] = pd.to_numeric(_cal_df["x_spacing_px"], errors="coerce")
+    _cal_df["mb_power_dB"] = pd.to_numeric(_cal_df["mb_power_dB"], errors="coerce")
+    _cal_df = _cal_df.dropna(subset=["x_spacing_px"])
+
+    _review: dict = {
+        "flight": FLT,
+        "total_frames": len(_review_df),
+        "calibrated_frames": len(_cal_df),
+        "excluded_frames": int((_excl != "").sum()),
+    }
+
+    # Flight-wide x_spacing median (reference for outlier detection)
+    _flt_xs_med = float(_cal_df["x_spacing_px"].median()) if len(_cal_df) > 0 else 205.0
+
+    _check_tiffs: list[dict] = []
+    _check_frames: list[dict] = []
+
+    for _tid in sorted(_cal_df["tiff_id"].unique()):
+        _sub = _cal_df[_cal_df["tiff_id"] == _tid]
+        _xs_med = float(_sub["x_spacing_px"].median())
+        _xs_std = float(_sub["x_spacing_px"].std()) if len(_sub) > 1 else 0.0
+
+        _reason = ""
+        if _xs_std > 10:
+            _reason = f"x_spacing varies > 10 px (std={_xs_std:.1f})"
+        elif abs(_xs_med - _flt_xs_med) > 15:
+            _reason = (f"x_spacing median ({_xs_med:.1f}) deviates "
+                       f"> 15 px from flight ({_flt_xs_med:.1f})")
+
+        if _reason:
+            # Flag individual frames with x_spacing outliers
+            _bad = _sub[
+                (_sub["x_spacing_px"] - _flt_xs_med).abs() > 15
+            ]
+            _bad_cbds = sorted(_bad["cbd"].dropna().astype(int).tolist())
+            _bad_frames = []
+            for _, _br in _bad.iterrows():
+                _bad_frames.append({
+                    "tiff_id": str(int(_br["tiff_id"])),
+                    "cbd": str(int(_br["cbd"])) if pd.notna(_br["cbd"]) and str(_br["cbd"]).strip() else "",
+                    "file_id": str(_br["file_id"]),
+                    "x_spacing_px": round(float(_br["x_spacing_px"]), 1),
+                })
+            _check_tiffs.append({
+                "tiff_id": str(int(_tid)),
+                "reason": _reason,
+                "x_spacing_median": round(_xs_med, 1),
+                "x_spacing_std": round(_xs_std, 1),
+                "n_frames": len(_sub),
+                "n_bad": len(_bad),
+                "bad_cbds": [f"{c:04d}" for c in _bad_cbds],
+            })
+            _check_frames.extend(_bad_frames)
+
+    _n_good_tiffs = int(_cal_df["tiff_id"].nunique()) - len(_check_tiffs)
+    _review["summary"] = {
+        "good_tiffs": _n_good_tiffs,
+        "check_tiffs": len(_check_tiffs),
+        "total_tiffs": int(_cal_df["tiff_id"].nunique()),
+        "flight_x_spacing_median": round(_flt_xs_med, 1),
+    }
+    _review["check_tiffs"] = _check_tiffs
+    _review["check_frames"] = _check_frames
+
+    with open(REVIEW_JSON, "w") as _f:
+        json.dump(_review, _f, indent=2)
+    print(f"  Review JSON   -> {REVIEW_JSON.relative_to(ROOT)}")
+    if _check_tiffs:
+        print(f"    {len(_check_tiffs)} CHECK TIFFs, "
+              f"{len(_check_frames)} flagged frames")
+    else:
+        print(f"    All {_n_good_tiffs} TIFFs GOOD")
 
 print("\nDone.")

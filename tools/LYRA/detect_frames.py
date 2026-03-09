@@ -32,7 +32,7 @@ Master index (per flight, updated incrementally):
 
 TIFF-level figures (named by tiff_id, never overwrite another TIFF's outputs):
     tools/LYRA/output/F{FLT}/phase1/F{FLT}_{tiff_id}_contact.png
-    tools/LYRA/output/F{FLT}/phase1/F{FLT}_{tiff_id}_ocr_diag.png  (OCR methods only)
+    tools/LYRA/output/F{FLT}/phase1/ocr_diag/F{FLT}_{tiff_id}_ocr_diag.png  (OCR methods only)
 
 Per-frame outputs in later steps use:
     CBD known   -> F{FLT}_{tiff_id}_CBD{cbd}_{desc}.ext
@@ -66,11 +66,13 @@ _parser = argparse.ArgumentParser(add_help=False)
 _parser.add_argument("tiff", nargs="?", default=None)
 _parser.add_argument("--cbd-start", type=int, default=None,
                      help="Override OCR: assign CBDs sequentially starting from this value")
-_parser.add_argument("--method", choices=["manual", "segment", "ncc"],
+_parser.add_argument("--method", choices=["manual", "segment", "ncc", "ml", "ensemble"],
                      default="segment",
                      help="CBD assignment method: 'manual' (ASTRA CSV ground truth), "
-                          "'segment' (structural 7-segment OCR, default), or "
-                          "'ncc' (NCC template matching)")
+                          "'segment' (structural 7-segment OCR, default), "
+                          "'ncc' (NCC template matching), "
+                          "'ml' (random forest classifier), or "
+                          "'ensemble' (segment + ML fusion)")
 _parser.add_argument("--override", nargs="*", default=None, metavar="FR:CBD",
                      help="Manually override specific frame CBDs, e.g. "
                           "--override 10:444 11:445 12:446. "
@@ -154,7 +156,7 @@ elif OCR_METHOD == "ncc":
                  "Run: python tools/LYRA/build_digit_templates.py")
     templates = np.load(TMPL_PATH, allow_pickle=True).item()
 
-elif OCR_METHOD == "segment":
+elif OCR_METHOD in ("segment", "ensemble"):
     from segment_ocr import recognize_frame_structural, SEGMENT_THRESHOLD
 
 # -- Load image -----------------------------------------------------------------
@@ -242,23 +244,60 @@ elif OCR_METHOD == "manual":
           f"{FLT}_CombinedASTRAPicks.csv")
 
 else:
-    # OCR path: segment or NCC
+    # OCR path: segment, ml, ensemble, or NCC
     method_used = OCR_METHOD
-    for i in complete_indices:
-        l, r  = frames[i]
-        crop  = (img_norm[:, l:r+1] * 255).clip(0, 255).astype(np.uint8)
-        fw    = crop.shape[1]
-        if OCR_METHOD == "segment":
-            recog, blobs, confs = recognize_frame_structural(crop, H, fw)
+    ml_model = None
+    conf_list = []  # per-frame confidence (ensemble only)
+    if OCR_METHOD in ("ml", "ensemble"):
+        from ml_ocr import load_model
+        ml_model = load_model()
+        if OCR_METHOD == "ml":
+            from ml_ocr import recognize_frame_ml
+            print("  ML model loaded")
+        else:
+            from ml_ocr import ensemble_select_best, recognize_frame_ml
+            print("  Ensemble model loaded (segment + ML)")
+
+    if OCR_METHOD == "ensemble":
+        # Run both methods on all frames, then let sequential constraint pick
+        seg_reads = []
+        ml_reads = []
+        for i in complete_indices:
+            l, r  = frames[i]
+            crop  = (img_norm[:, l:r+1] * 255).clip(0, 255).astype(np.uint8)
+            fw    = crop.shape[1]
+            seg_r, blobs, confs = recognize_frame_structural(crop, H, fw)
+            ml_r, _, _ = recognize_frame_ml(crop, H, fw, ml_model)
+            seg_reads.append(seg_r)
+            ml_reads.append(ml_r)
             diag_blobs[i] = blobs
             diag_confs[i] = confs
-        else:
-            recog, _ = recognize_frame(crop, H, fw, templates)
-        raw_reads_list.append(recog)
+        # Pick whichever method produces more sequential anchors
+        raw_reads_list, conf_list, ens_label = ensemble_select_best(
+            complete_indices, seg_reads, ml_reads, FLT)
+        method_used = ens_label
+        print(f"  Ensemble winner: {ens_label}")
+    else:
+        for i in complete_indices:
+            l, r  = frames[i]
+            crop  = (img_norm[:, l:r+1] * 255).clip(0, 255).astype(np.uint8)
+            fw    = crop.shape[1]
+            if OCR_METHOD == "ml":
+                recog, blobs, confs = recognize_frame_ml(crop, H, fw, ml_model)
+                diag_blobs[i] = blobs
+                diag_confs[i] = confs
+            elif OCR_METHOD == "segment":
+                recog, blobs, confs = recognize_frame_structural(crop, H, fw)
+                diag_blobs[i] = blobs
+                diag_confs[i] = confs
+            else:
+                recog, _ = recognize_frame(crop, H, fw, templates)
+            raw_reads_list.append(recog)
 
     # -- Stage 2: Sequential constraint correction ------------------------------
     corrected_list, n_anchors = apply_sequential_constraint(
-        complete_indices, raw_reads_list, flight=FLT)
+        complete_indices, raw_reads_list, flight=FLT,
+        confidences=conf_list if conf_list else None)
 
 # -- Build per-frame metadata ---------------------------------------------------
 # cbd_by_frame: frame_idx -> 4-digit CBD string or None
@@ -540,7 +579,9 @@ if method_used in ("segment", "ncc") and len(complete_indices) > 0:
         fontsize=10, y=1.02,
     )
     fig_d.tight_layout()
-    diag_path = PHASE1_DIR / f"F{FLT}_{TIFF_ID}_ocr_diag.png"
+    ocr_diag_dir = PHASE1_DIR / "ocr_diag"
+    ocr_diag_dir.mkdir(exist_ok=True)
+    diag_path = ocr_diag_dir / f"F{FLT}_{TIFF_ID}_ocr_diag.png"
     fig_d.savefig(diag_path, dpi=150, bbox_inches="tight", facecolor="white")
     plt.close(fig_d)
     print(f"  OCR diagnostic -> {diag_path.relative_to(ROOT)}")

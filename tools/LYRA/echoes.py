@@ -38,7 +38,7 @@ Outputs
 Per-flight echo CSV (updated incrementally):
     tools/LYRA/output/F{FLT}/phase4/F{FLT}_echoes.csv
       Columns: flight, tiff, cbd, file_id, echo_status,
-               noise_floor_dB,
+               noise_floor_dB, mb_power_dB, mb_correction_dB,
                surface_twt_us, surface_power_dB, surface_snr_dB,
                surface_width_10_us, surface_width_5_us, surface_peakiness,
                surface_asymmetry, surface_leading_rise_us, surface_trailing_tail_us,
@@ -46,6 +46,8 @@ Per-flight echo CSV (updated incrementally):
                bed_width_10_us, bed_width_5_us, bed_peakiness,
                bed_asymmetry, bed_leading_rise_us, bed_trailing_tail_us,
                h_air_m, h_ice_m, h_eff_m
+      Power/SNR values are gain-corrected using the main bang as a per-frame
+      reference (mb_correction_dB = flight_median_mb - frame_mb_power).
 
 Per-frame diagnostic figure (two-panel):
     tools/LYRA/output/F{FLT}/phase4/F{FLT}_{file_id}_echoes.png
@@ -145,6 +147,18 @@ if len(tiff_cals) == 0:
     sys.exit(f"ERROR: No phase 3 calibration rows for {TIFF.name} in {CAL_CSV}\n"
              "Run phase 3 (calibrate.py) for this TIFF first.")
 
+# -- Flight-wide mb_power reference for per-frame gain correction --------------
+# The main bang is a fixed internal signal (T/R switch leakage) that traverses
+# the full receiver chain but never leaves the aircraft.  Variation in mb_power
+# across frames reflects system gain changes (attenuator setting, CRT intensity)
+# rather than geophysical signal.  We use the flight-wide median as the expected
+# MB power and correct each frame's echo powers accordingly.
+_all_cals = cal_df.copy()
+_all_cals["mb_power_dB"] = pd.to_numeric(_all_cals["mb_power_dB"], errors="coerce")
+_excl_mask = _all_cals["exclude_reason"].fillna("").astype(str).str.strip().isin(["", "nan"])
+_valid_mb  = _all_cals.loc[_excl_mask, "mb_power_dB"].dropna()
+FLIGHT_MB_REF_DB = float(_valid_mb.median()) if len(_valid_mb) > 0 else -37.0
+
 # Build frame_idx -> calibration dict mapping (skip excluded frames)
 frame_cal: dict[int, dict] = {}
 for _, row in tiff_cals.iterrows():
@@ -155,6 +169,7 @@ for _, row in tiff_cals.iterrows():
     if not row["mb_x"] or str(row["mb_x"]).strip() == "":
         continue
     fidx = int(row["frame_idx"])
+    _mb_pwr = float(row["mb_power_dB"]) if row.get("mb_power_dB") else FLIGHT_MB_REF_DB
     frame_cal[fidx] = dict(
         mb_x        = int(float(row["mb_x"])),
         y_ref_px    = float(row["y_ref_px"]),
@@ -163,11 +178,23 @@ for _, row in tiff_cals.iterrows():
         cbd         = row["cbd"],
         file_id     = row["file_id"],
         tiff_id     = row.get("tiff_id", TIFF_ID),
+        mb_power_dB = _mb_pwr,
+        mb_correction_dB = round(FLIGHT_MB_REF_DB - _mb_pwr, 2),
     )
 
 print(f"\nLYRA Step 3 — {TIFF.name}")
 print(f"  Flight : F{FLT}  |  tiff_id : {TIFF_ID}")
-print(f"  Calibrated frames in step2 CSV : {len(frame_cal)}\n")
+print(f"  Calibrated frames in step2 CSV : {len(frame_cal)}")
+# Show mb_power correction info
+_this_mb = [c["mb_power_dB"] for c in frame_cal.values()]
+_this_corr = [c["mb_correction_dB"] for c in frame_cal.values()]
+_max_abs_corr = max(abs(c) for c in _this_corr) if _this_corr else 0
+print(f"  MB power ref  : {FLIGHT_MB_REF_DB:.1f} dB (flight median)")
+if _max_abs_corr > 0.5:
+    print(f"  MB correction : this TIFF range [{min(_this_corr):+.1f}, {max(_this_corr):+.1f}] dB")
+else:
+    print(f"  MB correction : < 0.5 dB (negligible)")
+print()
 
 # -- Load TIFF image ------------------------------------------------------------
 print("Loading TIFF ...")
@@ -602,6 +629,10 @@ for _, idx_row in tiff_rows.iterrows():
     # -- Detect surface and bed echoes ------------------------------------------
     surface_x, bed_x = detect_echoes(trace_y_s, mb_x, noise_floor_dB, cal)
 
+    # -- Save algorithmic positions before overrides ----------------------------
+    algo_surface_x = surface_x
+    algo_bed_x     = bed_x
+
     # -- Apply manual overrides (from echo_overrides.json) --------------------
     is_surface_override = is_bed_override = False
     override = echo_overrides.get(file_id, {})
@@ -625,14 +656,38 @@ for _, idx_row in tiff_rows.iterrows():
     ) if bed_x is not None else None
 
     # -- Classify echo_status ---------------------------------------------------
+    # Use gain-corrected bed SNR for the weak_bed threshold.  The attenuator
+    # sits before the receiver, so the noise floor is constant but the signal
+    # level shifts with attenuator/CRT gain changes.  Raw SNR is therefore
+    # inflated (or deflated) by the gain offset; corrected SNR reflects the
+    # true signal-to-noise ratio.
+    _mb_corr = fc["mb_correction_dB"]
     if surface is None:
         echo_status = "no_surface"
     elif bed is None:
         echo_status = "no_bed"
-    elif bed.peak_snr_dB < WEAK_BED_SNR_DB:
+    elif (bed.peak_snr_dB + _mb_corr) < WEAK_BED_SNR_DB:
         echo_status = "weak_bed"
     else:
         echo_status = "good"
+
+    # -- Original algorithmic echo_status (before overrides) -----------------
+    # Preserved for post-hoc threshold tuning: what did the algorithm find
+    # before the user corrected it?  Only differs from echo_status when an
+    # override was applied.
+    if not (is_surface_override or is_bed_override):
+        algo_echo_status = echo_status
+    elif algo_surface_x is None:
+        algo_echo_status = "no_surface"
+    elif algo_bed_x is None:
+        algo_echo_status = "no_bed"
+    else:
+        _algo_bed = compute_echo_metrics(
+            trace_y_s, algo_bed_x, noise_floor_dB, mb_x, frame_w, cal,
+            trace_y=trace_y)
+        algo_echo_status = ("weak_bed"
+                            if (_algo_bed.peak_snr_dB + _mb_corr) < WEAK_BED_SNR_DB
+                            else "good")
 
     # -- Bed envelope artifact flag -------------------------------------------
     # Check whether film artifacts exist in the post-bed region (between
@@ -695,6 +750,19 @@ for _, idx_row in tiff_rows.iterrows():
     def _e(echo, attr):
         return getattr(echo, attr, np.nan) if echo is not None else np.nan
 
+    # Per-frame MB power correction: normalise echo powers to the flight-wide
+    # reference MB level.  Removes system gain variation (attenuator changes,
+    # CRT intensity drift) while preserving real geophysical power differences.
+    # The MB is a fixed internal signal (T/R switch leakage) — any change in
+    # its measured power is purely instrumental.
+    _mb_corr = fc["mb_correction_dB"]  # positive = frame was weaker -> boost
+
+    def _corrected(raw_dB):
+        """Apply MB power correction to a raw dB measurement."""
+        if np.isnan(raw_dB):
+            return np.nan
+        return round(raw_dB + _mb_corr, 2)
+
     echo_rows.append(dict(
         flight      = FLT,
         tiff        = TIFF.name,
@@ -705,20 +773,23 @@ for _, idx_row in tiff_rows.iterrows():
         mb_x        = mb_x,
         echo_status = echo_status,
         noise_floor_dB = round(noise_floor_dB, 2),
-        # Surface echo
+        # MB power correction
+        mb_power_dB       = round(fc["mb_power_dB"], 2),
+        mb_correction_dB  = round(_mb_corr, 2),
+        # Surface echo (power and SNR corrected for system gain)
         surface_twt_us        = round(_e(surface, "peak_twt_us"),     4),
-        surface_power_dB      = round(_e(surface, "peak_power_dB"),   2),
-        surface_snr_dB        = round(_e(surface, "peak_snr_dB"),     2),
+        surface_power_dB      = _corrected(_e(surface, "peak_power_dB")),
+        surface_snr_dB        = _corrected(_e(surface, "peak_snr_dB")),
         surface_width_10_us   = round(_e(surface, "width_10_us"),     4),
         surface_width_5_us    = round(_e(surface, "width_5_us"),      4),
         surface_peakiness     = round(_e(surface, "peakiness"),       3),
         surface_asymmetry     = round(_e(surface, "asymmetry"),       3),
         surface_leading_rise_us  = round(_e(surface, "leading_rise_us"),  4),
         surface_trailing_tail_us = round(_e(surface, "trailing_tail_us"), 4),
-        # Bed echo
+        # Bed echo (power and SNR corrected for system gain)
         bed_twt_us            = round(_e(bed, "peak_twt_us"),    4),
-        bed_power_dB          = round(_e(bed, "peak_power_dB"),  2),
-        bed_snr_dB            = round(_e(bed, "peak_snr_dB"),    2),
+        bed_power_dB          = _corrected(_e(bed, "peak_power_dB")),
+        bed_snr_dB            = _corrected(_e(bed, "peak_snr_dB")),
         bed_width_10_us       = round(_e(bed, "width_10_us"),    4),
         bed_width_5_us        = round(_e(bed, "width_5_us"),     4),
         bed_peakiness         = round(_e(bed, "peakiness"),      3),
@@ -727,13 +798,14 @@ for _, idx_row in tiff_rows.iterrows():
         bed_trailing_tail_us  = round(_e(bed, "trailing_tail_us"), 4),
         bed_envelope_suspect  = bed_envelope_suspect,
         artifact_max_dB       = round(art_max_dB, 1),
-        # Geometry
+        # Geometry (unaffected by gain correction)
         h_air_m = round(h_air_m, 1) if not np.isnan(h_air_m) else np.nan,
         h_ice_m = round(h_ice_m, 1) if not np.isnan(h_ice_m) else np.nan,
         h_eff_m = round(h_eff_m, 1) if not np.isnan(h_eff_m) else np.nan,
         # Override flags
         surface_override = is_surface_override,
         bed_override     = is_bed_override,
+        algo_echo_status = algo_echo_status,
     ))
 
     # -- Generate two-panel diagnostic figure ----------------------------------
