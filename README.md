@@ -37,7 +37,7 @@ python tools/LYRA/echoes.py           Data/ascope/raw/125/40_0008400_0008424-ree
 python tools/LYRA/run_flight.py 126
 ```
 
-**Validated on**: F125 (258 frames, 203 good), F126 (300 frames, 113 good), F128 (phase 1 complete, 82 TIFFs), F141 (12 frames).
+**Validated on**: F125 (258 frames, 203 good), F126 (300 frames, 113 good), F128 (979 frames, 658 good), F141 (12 frames).
 
 ### Other Tools
 
@@ -66,7 +66,7 @@ python tools/LYRA/run_flight.py 126
 | F125 | Roosevelt Island / Ross Ice Shelf | 565 | LYRA phase 5 validated |
 | F126 | Ross Ice Shelf margin | 223 | LYRA phase 5 complete (37.7% yield) |
 | F127 | Ross Ice Shelf central | 570 | LYRA queued |
-| F128 | Ross Ice Shelf | 760 | LYRA phase 1 complete (82 TIFFs) |
+| F128 | Ross Ice Shelf | 760 | LYRA phase 5 complete (67.2% yield) |
 | F137 | Ross Ice Shelf NW | 146 | ASTRA complete |
 | F138 | Ross Ice Shelf | 323 | ASTRA complete |
 | F141 | Ross Ice Shelf | 498 | LYRA phase 3 validated |
