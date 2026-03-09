@@ -8,7 +8,7 @@ Investigating 50 years of change beneath the Ross Ice Shelf using archival 60 MH
 
 ## Overview
 
-This project derives **bed-echo character** (reflection coefficient R₀, power variance V_p, fading length τ_p) from archival A-scope radar data recorded on 35 mm film during 12 flights over the Ross Ice Shelf and Siple Coast ice streams. The 50-year temporal baseline — comparing 1970s radar with modern NASA Operation IceBridge, CReSIS, and ROSETTA-Ice surveys — provides the first direct measurements of basal change over half a century.
+We derive **bed-echo character** (reflection coefficient R₀, power variance V_p, fading length τ_p) from archival A-scope radar data recorded on 35 mm film during 12 flights over the Ross Ice Shelf and Siple Coast ice streams. The 50-year temporal baseline, comparing 1970s radar with modern NASA Operation IceBridge, CReSIS, and ROSETTA-Ice surveys, provides the first direct measurements of basal change over half a century.
 
 A collaboration between **Georgia Tech**, **Stanford University**, and **Colorado School of Mines**.
 
@@ -16,7 +16,7 @@ A collaboration between **Georgia Tech**, **Stanford University**, and **Colorad
 
 ### LYRA — Layered-echo Yield from Radiometric Archives
 
-Fully algorithmic A-scope waveform extraction pipeline designed for raw ASCOPE TIFF scans of oscilloscope film.
+A-scope waveform extraction pipeline for raw TIFF scans of oscilloscope film.
 
 | Phase | Script | Output |
 |-------|--------|--------|

@@ -539,7 +539,8 @@ def main():
     parser = argparse.ArgumentParser(
         description="LYRA flight-level orchestrator — batch process all TIFFs")
     parser.add_argument("flight", type=int, help="Flight number (e.g. 126)")
-    parser.add_argument("--method", choices=["manual", "segment"], default="manual",
+    parser.add_argument("--method", choices=["manual", "segment", "ml", "ensemble", "ncc"],
+                        default="manual",
                         help="CBD assignment method for phase 1 (default: manual)")
     parser.add_argument("--resume-from", type=int, choices=[1, 2, 3, 4, 5], default=1,
                         help="Resume from phase N (skip earlier phases)")
