@@ -24,7 +24,7 @@ Fully algorithmic A-scope waveform extraction pipeline designed for raw ASCOPE T
 | 2. Interactive calibration picks | `pick_calibration.py` | `cal_picks.json` |
 | 3. Grid calibration | `calibrate.py` | Per-frame calibration CSV + diagnostic figures |
 | 4. Echo extraction + review | `echoes.py` | Surface/bed TWT, power, SNR, width, h_air, h_ice + review overrides |
-| 5. Validation | `validate_flight.py` | BEDMAP1 comparison figure + flight summary |
+| 5. Validation | `validate_flight.py` | Multi-dataset validation figure + crossover analysis |
 
 ```bash
 # Typical single-TIFF workflow
@@ -37,7 +37,7 @@ python tools/LYRA/echoes.py           Data/ascope/raw/125/40_0008400_0008424-ree
 python tools/LYRA/run_flight.py 126
 ```
 
-**Validated on**: F125 (258 frames), F126 (300 frames), F127 (38 frames), F141 (12 frames).
+**Validated on**: F125 (258 frames, 203 good), F126 (300 frames, 113 good), F128 (phase 1 complete, 82 TIFFs), F141 (12 frames).
 
 ### Other Tools
 
@@ -52,6 +52,7 @@ python tools/LYRA/run_flight.py 126
 
 - **Navigation**: 61 per-flight CSVs in `Navigation_Files/` (CBD, LAT, LON, THK, SRF; 66,141 records)
 - **ASTRA picks**: 12-flight digitized A-scope picks in `Data/ascope/picks/`
+- **RIGGS**: Ice thickness from the Ross Ice Shelf Geophysical and Glaciological Survey (Bentley 1984) in `Data/RIGGS/`
 - **Raw TIFFs**: Not included in this repository (12 GB). Contact the team for access.
 
 ## Flights
@@ -62,10 +63,10 @@ python tools/LYRA/run_flight.py 126
 | F107 | Ross Ice Shelf NW | 423 | ASTRA complete |
 | F114 | Deep interior (85°S) | 206 | ASTRA complete |
 | F115 | Ross Ice Shelf | 405 | ASTRA complete |
-| F125 | Roosevelt Island / Ross Ice Shelf | 565 | LYRA validated |
-| F126 | Ross Ice Shelf margin | 223 | LYRA complete (37.7% yield) |
-| F127 | Ross Ice Shelf central | 570 | LYRA processing |
-| F128 | Ross Ice Shelf | 760 | ASTRA complete |
+| F125 | Roosevelt Island / Ross Ice Shelf | 565 | LYRA phase 5 validated |
+| F126 | Ross Ice Shelf margin | 223 | LYRA phase 5 complete (37.7% yield) |
+| F127 | Ross Ice Shelf central | 570 | LYRA queued |
+| F128 | Ross Ice Shelf | 760 | LYRA phase 1 complete (82 TIFFs) |
 | F137 | Ross Ice Shelf NW | 146 | ASTRA complete |
 | F138 | Ross Ice Shelf | 323 | ASTRA complete |
 | F141 | Ross Ice Shelf | 498 | LYRA phase 3 validated |
@@ -87,6 +88,7 @@ python tools/LYRA/run_flight.py 126
 
 - Neal, C. S. (1977). *Radio echo studies of the Ross Ice Shelf*. PhD thesis, University of Cambridge.
 - Neal, C. S. (1979). The dynamics of the Ross Ice Shelf revealed by radio echo-sounding. *J. Glaciol.*, 24(90), 295–307.
+- Bentley, C. R. et al. (1979). Ice-thickness patterns and the dynamics of the Ross Ice Shelf. *J. Glaciol.*, 24(90), 287–294.
 - Schroeder, D. M. et al. (2021). Archival radar data and the future of ice sheet research.
 - Millar, D. H. M. (1981). *Radio echo layering in polar ice sheets*. PhD thesis, University of Cambridge.
 
