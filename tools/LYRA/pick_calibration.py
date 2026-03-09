@@ -58,7 +58,7 @@ import matplotlib.pyplot as plt
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools/LYRA"))
 
-from lyra import ensure_canonical_name, tiff_id as lyra_tiff_id
+from lyra import ensure_canonical_name, resolve_tiff_arg, tiff_id as lyra_tiff_id
 
 # Display crop: show full display band plus context
 Y_CROP_LO = 100
@@ -172,9 +172,7 @@ def build_tiff_queue(args) -> tuple[list[Path], int, Path]:
             sys.exit("ERROR: --tiff requires --flight")
 
         if args.tiff_path:
-            tiff = Path(args.tiff_path)
-            if not tiff.is_absolute():
-                tiff = ROOT / tiff
+            tiff = resolve_tiff_arg(args.tiff_path, ROOT)
         else:
             tiff = ROOT / "Data/ascope/raw/125/40_0008400_0008424-reel_begin_end.tiff"
 
