@@ -139,7 +139,7 @@ print()
 # Without this, all frames use DEFAULT_CAL's 205.54 px (measured on F125), which
 # causes progressive drift on any TIFF with a different oscilloscope time base.
 if not derived_cal.get("x_spacing_px") and raw_picks:
-    _default_sp = 1.5 / DEFAULT_CAL["us_per_px"]   # F125 baseline spacing
+    _default_sp = 2.0 / DEFAULT_CAL["us_per_px"]   # F125 baseline spacing
     for _picks in raw_picks.values():
         _xg = _picks.get("x_grid")
         if _xg and len(_xg) >= 2:
@@ -158,7 +158,7 @@ if not derived_cal.get("x_spacing_px") and raw_picks:
 # Derived from the first guided frame that has both an mb pick and x_grid click(s).
 tiff_d_anchor: float | None = None
 if raw_picks:
-    _sp = derived_cal.get("x_spacing_px", 1.5 / DEFAULT_CAL["us_per_px"])
+    _sp = derived_cal.get("x_spacing_px", 2.0 / DEFAULT_CAL["us_per_px"])
     for _picks in raw_picks.values():
         _mb = _picks.get("mb")
         _xg = _picks.get("x_grid")
@@ -491,7 +491,7 @@ for _, row in tiff_rows.iterrows():
         mb_power_dB   = round(mb_power_dB, 2),
         y_ref_px      = round(y_ref_px, 1),
         db_per_px     = round(db_per_px, 6),
-        us_per_px     = round(1.5 / x_spacing_px, 8) if x_spacing_px > 0 else round(DEFAULT_CAL["us_per_px"], 8),
+        us_per_px     = round(2.0 / x_spacing_px, 8) if x_spacing_px > 0 else round(DEFAULT_CAL["us_per_px"], 8),
         x_spacing_px  = round(x_spacing_px, 2),
         hgrid_spacing = round(hgrid_sp, 1) if hgrid_sp else "",
         cal_source_y  = cal["cal_source_y"],
@@ -533,7 +533,7 @@ if cal_rows:
                     mb_power_dB   = round(mbp2, 2),
                     y_ref_px      = round(cal2["y_ref_px"], 1),
                     db_per_px     = round(cal2["db_per_px"], 6),
-                    us_per_px     = round(1.5 / xsp2, 8) if xsp2 > 0 else round(DEFAULT_CAL["us_per_px"], 8),
+                    us_per_px     = round(2.0 / xsp2, 8) if xsp2 > 0 else round(DEFAULT_CAL["us_per_px"], 8),
                     x_spacing_px  = round(xsp2, 2),
                     hgrid_spacing = round(cal2["hgrid_spacing"], 1) if cal2["hgrid_spacing"] else "",
                     cal_source_y  = cal2["cal_source_y"],

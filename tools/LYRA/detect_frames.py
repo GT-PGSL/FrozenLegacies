@@ -116,13 +116,6 @@ PHASE1_DIR.mkdir(parents=True, exist_ok=True)
 INDEX_CSV = PHASE1_DIR / f"F{FLT}_frame_index.csv"
 
 # -- Method-specific setup -----------------------------------------------------
-# --override implies --method manual when ASTRA data exists
-if _args.override and _args.method == "segment":
-    ASTRA_CSV_CHECK = ROOT / f"Data/ascope/picks/{FLT}/{FLT}_CombinedASTRAPicks.csv"
-    if ASTRA_CSV_CHECK.exists():
-        _args.method = "manual"
-        print(f"  [info] --override provided; auto-selecting --method manual (ASTRA data found)")
-
 OCR_METHOD = _args.method
 templates  = None
 astra_cbds = None   # list of CBD ints for this TIFF (manual method only)

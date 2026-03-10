@@ -14,6 +14,7 @@ Usage:
     python tools/LYRA/run_flight.py 126 --method segment
     python tools/LYRA/run_flight.py 126 --resume-from 3
     python tools/LYRA/run_flight.py 126 --skip-picks
+    python tools/LYRA/run_flight.py 137 --cbd-start 7600:300
 """
 
 from __future__ import annotations
@@ -102,20 +103,48 @@ def _pause(msg: str = "Press ENTER to continue ..."):
 
 # -- Phase 1: Frame Detection ------------------------------------------------
 
-def run_phase1(flt: int, tiffs: list[Path], method: str, out_dir: Path):
+def _count_complete_frames(tiff_name: str, index_csv: Path) -> int:
+    """Count complete frames for a TIFF from the frame index CSV."""
+    if not index_csv.exists():
+        return 0
+    df = pd.read_csv(index_csv, dtype=str)
+    df.columns = df.columns.str.strip()
+    tiff_rows = df[df["tiff"].str.strip() == tiff_name]
+    return int((tiff_rows["frame_type"].str.strip() == "complete").sum())
+
+
+def run_phase1(flt: int, tiffs: list[Path], method: str, out_dir: Path,
+               cbd_start_map: dict[int, int] | None = None):
     """Run frame detection on all TIFFs, print CBD lookup table."""
 
     index_csv = out_dir / "phase1" / f"F{flt}_frame_index.csv"
     astra = get_astra_coverage(flt) if method == "manual" else {}
+    if cbd_start_map is None:
+        cbd_start_map = {}
+
+    # Track next CBD for propagation
+    next_cbd: int | None = None
 
     success, failed, skipped = [], [], []
 
     for i, tiff in enumerate(tiffs, 1):
         tid = _tiff_id(tiff)
 
+        # Propagate cbd_start: explicit map entry takes priority, else use
+        # the running next_cbd from the previous TIFF
+        tiff_cbd_start: int | None = None
+        if tid in cbd_start_map:
+            tiff_cbd_start = cbd_start_map[tid]
+        elif next_cbd is not None:
+            tiff_cbd_start = next_cbd
+
         # Skip if already processed
         if check_tiff_in_csv(tiff.name, index_csv):
             skipped.append(tiff)
+            # Still propagate: count complete frames to keep next_cbd correct
+            if tiff_cbd_start is not None:
+                n_complete = _count_complete_frames(tiff.name, index_csv)
+                next_cbd = tiff_cbd_start + n_complete
             print(f"  [{i:>2}/{len(tiffs)}]  {tid:>5}  [skip]")
             continue
 
@@ -125,6 +154,11 @@ def run_phase1(flt: int, tiffs: list[Path], method: str, out_dir: Path):
         if method == "manual" and tiff.stem not in astra:
             tiff_method = "segment"
             extra = ["--method", "segment"]
+
+        # If cbd_start is known, override OCR entirely
+        if tiff_cbd_start is not None:
+            extra = ["--cbd-start", str(tiff_cbd_start)]
+            tiff_method = "cbd-start"
 
         result = _run_step(DETECT_SCRIPT, tiff, extra)
         if result.returncode == 0:
@@ -137,14 +171,23 @@ def run_phase1(flt: int, tiffs: list[Path], method: str, out_dir: Path):
                         n_frames = int(line.split(":")[1].split("detected")[0].strip())
                     except (ValueError, IndexError):
                         pass
+            # Propagate next CBD from complete frame count
+            if tiff_cbd_start is not None:
+                n_complete = _count_complete_frames(tiff.name, index_csv)
+                next_cbd = tiff_cbd_start + n_complete
             note = ""
-            if method == "manual" and tiff_method == "segment":
+            if tiff_cbd_start is not None:
+                note = f"  (cbd-start={tiff_cbd_start})"
+            elif method == "manual" and tiff_method == "segment":
                 note = "  (no ASTRA)"
             print(f"  [{i:>2}/{len(tiffs)}]  {tid:>5}  [{n_frames:>3} fr]  {tiff_method}{note}")
         else:
             err_line = (result.stderr + result.stdout).strip().split("\n")[-1]
             failed.append((tiff, err_line))
             print(f"  [{i:>2}/{len(tiffs)}]  {tid:>5}  \033[31m[FAIL]\033[0m {err_line[:60]}")
+            # On failure, stop propagation — don't guess
+            if tiff_cbd_start is not None:
+                next_cbd = None
 
     # Print summary
     print(f"\n  Phase 1 summary: {len(success)} new, {len(skipped)} skipped, {len(failed)} failed")
@@ -546,6 +589,9 @@ def main():
                         help="Resume from phase N (skip earlier phases)")
     parser.add_argument("--skip-picks", action="store_true",
                         help="Skip Phase 2 pause (assume picks are done)")
+    parser.add_argument("--cbd-start", metavar="TIFF_ID:CBD",
+                        help="Set starting CBD for a TIFF and propagate to all "
+                             "subsequent TIFFs, e.g. --cbd-start 7600:300")
     args = parser.parse_args()
 
     flt = args.flight
@@ -563,12 +609,26 @@ def main():
     canonical = [t for t in tiffs if "_" in t.stem and t.stem[0].isdigit()]
     non_canonical = [t for t in tiffs if t not in canonical]
 
+    # Parse --cbd-start TIFF_ID:CBD
+    cbd_start_map: dict[int, int] = {}  # tiff_id -> starting CBD
+    if args.cbd_start:
+        if ":" not in args.cbd_start:
+            sys.exit("ERROR: --cbd-start expects TIFF_ID:CBD format, e.g. 7600:300")
+        try:
+            _tid_str, _cbd_str = args.cbd_start.split(":", 1)
+            cbd_start_map[int(_tid_str)] = int(_cbd_str)
+        except ValueError:
+            sys.exit(f"ERROR: --cbd-start expects integers, got '{args.cbd_start}'")
+
     print(f"\n  LYRA Flight Orchestrator — F{flt}")
     print(f"  {'-'*40}")
     print(f"  Raw directory:  {raw_dir}")
     print(f"  TIFFs found:    {len(canonical)} canonical" +
           (f" + {len(non_canonical)} non-canonical (skipped)" if non_canonical else ""))
     print(f"  CBD method:     {args.method}")
+    if cbd_start_map:
+        for _tid, _cbd in sorted(cbd_start_map.items()):
+            print(f"  CBD start:      TIFF {_tid} -> CBD {_cbd:04d} (propagating to subsequent TIFFs)")
     if non_canonical:
         for t in non_canonical:
             print(f"    [skipped] {t.name}")
@@ -581,7 +641,7 @@ def main():
         print(f"  PHASE 1: Frame Detection + CBD Assignment")
         print(f"  {'='*55}\n")
 
-        run_phase1(flt, tiffs, args.method, out_dir)
+        run_phase1(flt, tiffs, args.method, out_dir, cbd_start_map)
 
         print(f"\n  Check contact sheets in: {out_dir / 'phase1'}/")
         print(f"  To fix CBD assignments:")

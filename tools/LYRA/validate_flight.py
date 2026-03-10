@@ -40,6 +40,10 @@ from scipy.spatial import cKDTree
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from plot_flight_tracks import load_basemap_ps, _graticule_line, _meridian_line, _geo_label
 
+# Import alignment functions from lyra
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import lyra as _lyra
+
 # -- Paths (relative to repo root) --------------------------------------------
 
 REPO = Path(__file__).resolve().parent.parent.parent  # FrozenLegacies/
@@ -54,7 +58,7 @@ MATCH_RADIUS_M = 20_000  # max distance (m) for nearest-neighbour match
 NAV_MISSING = 9999       # sentinel for missing THK/SRF in Navigation CSVs
 ASTRA_DIR = REPO / "Data" / "ascope" / "picks"
 
-# ASTRA timing correction: ASTRA assumed 3 µs/div but correct is 1.5 µs/div
+# ASTRA timing correction: ASTRA assumed 3 µs/div but correct is 2.0 µs/div
 C_ICE = 168.0   # m/µs
 C_AIR = 300.0   # m/µs
 
@@ -134,13 +138,8 @@ def load_echoes(flt: int) -> pd.DataFrame:
 
 
 def load_navigation(flt: int) -> pd.DataFrame:
-    """Load navigation CSV for a flight."""
-    nav_path = NAV_DIR / f"{flt}.csv"
-    if not nav_path.exists():
-        sys.exit(f"Navigation file not found: {nav_path}")
-    nav = pd.read_csv(nav_path)
-    nav.columns = nav.columns.str.strip()
-    return nav
+    """Load navigation CSV for a flight (via lyra.load_stanford_nav)."""
+    return _lyra.load_stanford_nav(flt)
 
 
 def load_bedmap() -> gpd.GeoDataFrame:
@@ -153,11 +152,11 @@ def load_bedmap() -> gpd.GeoDataFrame:
 def load_astra(flt: int) -> pd.DataFrame | None:
     """Load ASTRA manual picks for a flight and compute corrected h_ice/h_air.
 
-    ASTRA assumed 3 us/div but the correct calibration is 1.5 us/div,
-    so all travel times must be divided by 2.  Then convert one-way:
-        h_ice = (bed_us - surface_us) / 4 * c_ice
-        h_air = surface_us / 4 * c_air
-    (divide by 4 = /2 for ASTRA error * /2 for two-way -> one-way)
+    ASTRA assumed 3 us/div but the correct calibration is 2.0 us/div,
+    so all travel times must be divided by 1.5.  Then convert one-way:
+        h_ice = (bed_us - surface_us) / 3 * c_ice
+        h_air = surface_us / 3 * c_air
+    (divide by 3 = /1.5 for ASTRA error * /2 for two-way -> one-way)
 
     Returns DataFrame with columns: CBD, h_ice_astra, h_air_astra
     or None if no ASTRA data exists.
@@ -175,9 +174,9 @@ def load_astra(flt: int) -> pd.DataFrame | None:
     if astra.empty:
         return None
 
-    # Apply /2 timing correction + one-way conversion (/4 total)
-    astra["h_ice_astra"] = (astra["bed_us"] - astra["surface_us"]) / 4 * C_ICE
-    astra["h_air_astra"] = astra["surface_us"] / 4 * C_AIR
+    # Apply /1.5 timing correction + one-way conversion (/3 total)
+    astra["h_ice_astra"] = (astra["bed_us"] - astra["surface_us"]) / 3 * C_ICE
+    astra["h_air_astra"] = astra["surface_us"] / 3 * C_AIR
 
     # Keep only valid ice thicknesses
     astra = astra[astra["h_ice_astra"] > 0].copy()
@@ -261,9 +260,15 @@ def load_riggs_stations() -> pd.DataFrame | None:
 
 # -- Core logic ----------------------------------------------------------------
 
-def merge_with_nav(echoes: pd.DataFrame, nav: pd.DataFrame) -> pd.DataFrame:
-    """Join echoes with navigation on CBD."""
-    merged = echoes.merge(nav, left_on="cbd", right_on="CBD", how="left")
+def merge_with_nav(echoes: pd.DataFrame, nav: pd.DataFrame,
+                   offset: int = 0) -> pd.DataFrame:
+    """Join echoes with navigation on CBD, applying a CBD offset.
+
+    The offset means: nav row index = lyra_cbd + offset.
+    """
+    echoes = echoes.copy()
+    echoes["nav_cbd"] = echoes["cbd"] + offset
+    merged = echoes.merge(nav, left_on="nav_cbd", right_on="CBD", how="left")
     merged["has_nav"] = merged["LAT"].notna()
     return merged
 
@@ -1174,6 +1179,8 @@ def main():
                              f"(default {MATCH_RADIUS_M})")
     parser.add_argument("--riggs-map", action="store_true",
                         help="Generate standalone RIGGS station map and exit")
+    parser.add_argument("--recompute-alignment", action="store_true",
+                        help="Force recomputation of CBD-to-nav alignment")
     args = parser.parse_args()
 
     # -- Standalone RIGGS map mode -----------------------------------------
@@ -1194,13 +1201,44 @@ def main():
     echoes = load_echoes(flt)
     print(f"    {len(echoes)} frames")
 
+    # -- CBD-to-nav alignment -----------------------------------------------
+    out_dir = OUTPUT_BASE / f"F{flt}"
+    alignment = None
+    if not args.recompute_alignment:
+        alignment = _lyra.load_alignment(flt, out_dir)
+    if alignment is None:
+        print("  Computing CBD-to-nav alignment ...")
+        echoes_csv = out_dir / "phase4" / f"F{flt}_echoes.csv"
+        alignment = _lyra.align_cbd_to_nav(echoes_csv, flt)
+        _lyra.save_alignment(alignment, out_dir)
+    anchor_str = (f", {alignment.n_anchor_windows} anchor windows"
+                  if alignment.n_anchor_windows > 0 else "")
+    print(f"    CBD offset: {alignment.offset:+d} "
+          f"(r={alignment.correlation:.3f}, "
+          f"method={alignment.method}{anchor_str}, "
+          f"confidence={alignment.confidence})")
+    report["alignment"] = {
+        "offset": alignment.offset,
+        "correlation": alignment.correlation,
+        "n_matched": alignment.n_matched,
+        "confidence": alignment.confidence,
+        "method": alignment.method,
+        "n_anchor_windows": alignment.n_anchor_windows,
+        "riggs_validation": alignment.riggs_validation,
+    }
+
+    # -- Enrich echoes CSV with lat/lon ------------------------------------
+    echoes_csv_path = out_dir / "phase4" / f"F{flt}_echoes.csv"
+    _lyra.enrich_echoes_with_nav(flt, echoes_csv_path, offset=alignment.offset)
+    print(f"    Enriched echoes CSV with lat/lon (offset={alignment.offset:+d})")
+
     # -- Navigation --------------------------------------------------------
     print("  Loading navigation ...")
     nav = load_navigation(flt)
-    print(f"    {len(nav)} CBDs with coordinates")
+    print(f"    {len(nav)} nav waypoints")
 
-    print("  Merging echoes with navigation ...")
-    merged = merge_with_nav(echoes, nav)
+    print("  Merging echoes with navigation (offset={:+d}) ...".format(alignment.offset))
+    merged = merge_with_nav(echoes, nav, offset=alignment.offset)
     n_with_nav = int(merged["has_nav"].sum())
     print(f"    {n_with_nav}/{len(merged)} frames matched to coordinates")
 

@@ -20,13 +20,14 @@ For each A-scope frame in a TIFF this module:
         leading_rise_us  = peak_twt - lead_10  (onset steepness)
   8.  Returns a flat pandas DataFrame (one row per frame)
 
-Grid calibration (validated vs Neal 1977 Fig 1.3a, CBD 0465, F125):
-  X-axis : 1.5 µs / major division  (205.54 px/major; 4 minor ticks -> 0.3 µs/minor)
+Grid calibration (validated vs Neal 1977 Fig 1.3a, CBD 0465, F125;
+  corrected 2026-03-10: true sweep is 2.0 us/div, not 1.5):
+  X-axis : 2.0 µs / major division  (205.54 px/major; 4 minor ticks -> 0.4 µs/minor)
   Y-axis : 10 dB  / major division  (205.0  px/major)
   Noise floor reference : y = 1507 px  -> -60 dB
 
 WARNING: Do NOT use ASTRA surface_us / bed_us for geometry — those times are
-         2× too large (ASTRA assumed 3.0 µs/major; correct value is 1.5 µs/major).
+         1.5× too large (ASTRA assumed 3.0 µs/major; correct value is 2.0 µs/major).
          Use only LYRA-derived travel times.
 
 Physical interpretation of waveform metrics:
@@ -252,7 +253,7 @@ _X_SPACING_PX = 205.54   # pixels per major X division (measured from TIFF)
 _Y_SPACING_PX = 205.0    # pixels per major Y division (user confirmed)
 
 DEFAULT_CAL: dict = dict(
-    us_per_px     = 1.5 / _X_SPACING_PX,   # 0.007299 µs/px   <- VALIDATED
+    us_per_px     = 2.0 / _X_SPACING_PX,   # 0.009732 µs/px   <- corrected 2026-03-10
     db_per_px     = 10.0 / _Y_SPACING_PX,  # 0.048780 dB/px
     y_ref_px      = 1507,    # row of -60 dB reference line
     y_ref_db      = -60.0,   # dB at the reference row
@@ -1701,7 +1702,7 @@ def detect_frame_calibration(
     # Derive spacing constants: prefer guide, then default_cal, then DEFAULT_CAL
     x_spacing_px = float(guides.get("x_spacing_px",
                          default_cal.get("x_spacing_px",
-                         1.5 / default_cal["us_per_px"])))
+                         2.0 / default_cal["us_per_px"])))
     y_spacing_px = float(guides.get("y_spacing_px",
                          default_cal.get("y_spacing_px",
                          10.0 / default_cal["db_per_px"])))
@@ -1928,3 +1929,702 @@ def to_dataframe(results: list[LyraFrame],
         rows.append(row)
 
     return pd.DataFrame(rows)
+
+
+# ===========================================================================
+# Navigation & CBD Alignment
+# ===========================================================================
+#
+# Maps LYRA CBD numbers to geographic positions by cross-correlating
+# LYRA h_ice against Bingham ICE_THICKN along the Stanford nav track.
+# ---------------------------------------------------------------------------
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+_NAV_DIR = _REPO_ROOT / "Navigation_Files"
+_BINGHAM_DIR = _NAV_DIR / "Bingham" / "002_nav_data_rgb_corrected"
+_RIGGS_CSV = _REPO_ROOT / "Data" / "RIGGS" / "riggs_stations.csv"
+
+
+def load_stanford_nav(flt: int | str) -> pd.DataFrame:
+    """Load Stanford navigation CSV for a flight.
+
+    Returns DataFrame with columns: CBD, LAT, LON, THK, SRF.
+    CBD is always equal to the 0-based row index.
+    THK/SRF = 9999 means missing.
+    """
+    flt = str(flt).lstrip("Ff")
+    for candidate in [_NAV_DIR / "Stanford" / f"{flt}.csv",
+                      _NAV_DIR / f"{flt}.csv"]:
+        if candidate.exists():
+            df = pd.read_csv(candidate)
+            df.columns = df.columns.str.strip()
+            return df
+    raise FileNotFoundError(
+        f"Stanford nav not found for F{flt}: tried "
+        f"{_NAV_DIR / 'Stanford' / f'{flt}.csv'} and {_NAV_DIR / f'{flt}.csv'}")
+
+
+def load_bingham_ice_thickness(flt: int | str) -> pd.DataFrame | None:
+    """Load Bingham corrected TXT and return ICE_THICKN indexed by Stanford CBD.
+
+    Steps:
+      1. Load Bingham TXT (handles F128 special column format).
+      2. Filter to rows with valid ICE_THICKN > 0.
+      3. Spatially match each Bingham row to the nearest Stanford nav row.
+      4. Return DataFrame with columns: stanford_cbd, ice_thickn, lat, lon, match_km.
+
+    Returns None if the Bingham file doesn't exist or has no valid ICE_THICKN.
+    """
+    from pyproj import Transformer
+
+    flt_str = str(flt).lstrip("Ff")
+    txt_path = _BINGHAM_DIR / f"sprinsftud_1974_{flt_str}_nav.txt"
+    if not txt_path.exists():
+        return None
+
+    bingham = pd.read_csv(txt_path, sep="\t")
+    bingham.columns = bingham.columns.str.strip()
+
+    # Normalize column names (F128 uses different headers)
+    if "ICE_THICKN" not in bingham.columns:
+        return None
+
+    valid = bingham["ICE_THICKN"].notna() & (bingham["ICE_THICKN"] > 0)
+    bingham = bingham[valid].copy()
+    if len(bingham) == 0:
+        return None
+
+    # Load Stanford nav for spatial matching
+    try:
+        stanford = load_stanford_nav(flt_str)
+    except FileNotFoundError:
+        return None
+
+    # Project to EPSG:3031 for spatial matching
+    T = Transformer.from_crs("EPSG:4326", "EPSG:3031", always_xy=True)
+    from scipy.spatial import cKDTree
+
+    st_x, st_y = T.transform(stanford["LON"].values, stanford["LAT"].values)
+    st_xy = np.column_stack([st_x, st_y])
+
+    bg_x, bg_y = T.transform(bingham["LONGITUDE"].values, bingham["LATITUDE"].values)
+    bg_xy = np.column_stack([bg_x, bg_y])
+
+    tree = cKDTree(st_xy)
+    dists, idxs = tree.query(bg_xy)
+    dists_km = dists / 1000.0
+
+    result = pd.DataFrame({
+        "stanford_cbd": stanford["CBD"].values[idxs],
+        "ice_thickn":   bingham["ICE_THICKN"].values,
+        "lat":          bingham["LATITUDE"].values,
+        "lon":          bingham["LONGITUDE"].values,
+        "match_km":     dists_km,
+    })
+
+    # Warn if any matches are far
+    far = (result["match_km"] > 5.0).sum()
+    if far > 0:
+        warnings.warn(f"F{flt_str}: {far}/{len(result)} Bingham points > 5 km "
+                      f"from nearest Stanford nav point")
+
+    return result
+
+
+@dataclass
+class AlignmentResult:
+    """Result of CBD-to-navigation cross-correlation alignment."""
+    flight: int
+    offset: int                    # nav_row = lyra_cbd + offset
+    correlation: float             # peak Pearson r (best anchor or global)
+    n_matched: int                 # LYRA good frames used in best match
+    n_reference: int               # total Bingham ICE_THICKN values
+    search_range: tuple            # (min_offset, max_offset) searched
+    second_best_corr: float        # for confidence assessment
+    confidence: str                # "high" / "medium" / "low"
+    riggs_validation: dict | None  # RIGGS cross-check results
+    n_anchor_windows: int = 0     # number of agreeing anchor windows
+    method: str = "global"         # "windowed" or "global" (fallback)
+
+
+def _xcorr_at_offset(lyra_cbd, lyra_hice, ref_lookup, offset, min_pairs=10):
+    """Compute Pearson r for a single offset. Returns (r, n_pairs)."""
+    shifted = lyra_cbd + offset
+    pl, pr = [], []
+    for i, sc in enumerate(shifted):
+        if sc in ref_lookup and np.isfinite(lyra_hice[i]):
+            pl.append(lyra_hice[i])
+            pr.append(ref_lookup[sc])
+    n = len(pl)
+    if n < min_pairs:
+        return -9999.0, n
+    pl, pr = np.array(pl), np.array(pr)
+    if np.std(pl) < 1e-6 or np.std(pr) < 1e-6:
+        return 0.0, n
+    return float(np.corrcoef(pl, pr)[0, 1]), n
+
+
+def _windowed_xcorr(
+    lyra_cbd: np.ndarray,
+    lyra_hice: np.ndarray,
+    ref_lookup: dict,
+    search_range: tuple = (-200, 200),
+    window_size: int = 40,
+    window_step: int = 10,
+    min_std_m: float = 30.0,
+    min_pairs: int = 10,
+    min_r: float = 0.7,
+) -> list[dict]:
+    """Find anchor windows where local h_ice cross-correlation is strong.
+
+    Slides a window across the sorted LYRA CBD sequence. In each window,
+    scans all offsets and keeps windows with high correlation and sufficient
+    ice-thickness variation.
+
+    Returns list of anchor dicts sorted by r descending.
+    """
+    # Sort by CBD
+    order = np.argsort(lyra_cbd)
+    cbd_s = lyra_cbd[order]
+    hice_s = lyra_hice[order]
+    n_total = len(cbd_s)
+
+    anchors = []
+
+    for start in range(0, n_total - min_pairs, window_step):
+        end = min(start + window_size, n_total)
+        w_cbd = cbd_s[start:end]
+        w_hice = hice_s[start:end]
+
+        # Skip windows with insufficient terrain variation
+        valid = np.isfinite(w_hice)
+        if valid.sum() < min_pairs:
+            continue
+        if np.std(w_hice[valid]) < min_std_m:
+            continue
+
+        # Scan offsets for this window
+        best_off, best_r, best_n = 0, -9999.0, 0
+        second_r = -9999.0
+
+        for off in range(search_range[0], search_range[1] + 1):
+            r, n = _xcorr_at_offset(w_cbd, w_hice, ref_lookup, off, min_pairs)
+            if r > best_r:
+                # Update second-best before overwriting best
+                if abs(off - best_off) >= 5:
+                    second_r = best_r
+                best_off, best_r, best_n = off, r, n
+            elif r > second_r and abs(off - best_off) >= 5:
+                second_r = r
+
+        if best_r >= min_r and best_n >= min_pairs:
+            anchors.append({
+                "cbd_center": int(np.median(w_cbd)),
+                "offset": best_off,
+                "r": round(best_r, 4),
+                "n_pairs": best_n,
+                "lyra_std": round(float(np.std(w_hice[valid])), 1),
+                "second_r": round(second_r, 4) if second_r > -9000 else -1.0,
+            })
+
+    # Sort by correlation descending
+    anchors.sort(key=lambda a: a["r"], reverse=True)
+    return anchors
+
+
+def align_cbd_to_nav(
+    echoes_csv: Path | str | pd.DataFrame,
+    flt: int | str,
+    search_range: tuple = (-200, 200),
+    min_matched: int = 15,
+) -> AlignmentResult:
+    """Find optimal CBD offset using windowed cross-correlation with track propagation.
+
+    Uses a two-stage approach:
+      1. Windowed cross-correlation: slides a 40-CBD window along the LYRA
+         h_ice profile, correlating against Bingham ICE_THICKN at each offset.
+         Windows with strong terrain variation (std > 30 m) and high correlation
+         (r > 0.7) become "anchor windows."
+      2. Offset consensus: if multiple anchors agree on the same offset (within
+         +/-2), that offset is adopted with high confidence. Even on flights with
+         mostly flat ice, a single terrain-rich segment can anchor the entire
+         flight thanks to the confirmed 1:1 CBD-to-waypoint ratio.
+
+    Falls back to global correlation and RIGGS tiebreaking when no anchors found.
+
+    The offset means: Stanford nav row index = LYRA CBD + offset.
+
+    Parameters
+    ----------
+    echoes_csv : path to phase 4 echoes CSV, or a pre-loaded DataFrame
+    flt : flight number
+    search_range : (min_offset, max_offset) to test
+    min_matched : minimum number of matched pairs for global correlation
+
+    Returns
+    -------
+    AlignmentResult with offset, correlation, confidence, RIGGS validation,
+    anchor window count, and method used.
+    """
+    flt_str = str(flt).lstrip("Ff")
+    flt_int = int(flt_str)
+
+    def _empty(conf="low"):
+        return AlignmentResult(
+            flight=flt_int, offset=0, correlation=0.0,
+            n_matched=0, n_reference=0, search_range=search_range,
+            second_best_corr=0.0, confidence=conf, riggs_validation=None)
+
+    # Load LYRA echoes
+    if isinstance(echoes_csv, pd.DataFrame):
+        echoes = echoes_csv
+    else:
+        echoes = pd.read_csv(echoes_csv)
+        echoes.columns = echoes.columns.str.strip()
+
+    good = echoes[echoes["echo_status"] == "good"].copy()
+    if len(good) == 0:
+        return _empty()
+
+    lyra_cbd = good["cbd"].astype(int).values
+    lyra_hice = good["h_ice_m"].values
+
+    # Load Bingham ICE_THICKN indexed by Stanford CBD
+    bingham = load_bingham_ice_thickness(flt_str)
+    if bingham is None or len(bingham) == 0:
+        return _empty()
+
+    ref_lookup = bingham.groupby("stanford_cbd")["ice_thickn"].mean().to_dict()
+
+    # ---- Stage 1: windowed cross-correlation --------------------------------
+    anchors = _windowed_xcorr(lyra_cbd, lyra_hice, ref_lookup, search_range)
+
+    # ---- Stage 2: offset consensus from anchor windows ----------------------
+    consensus_offset = None
+    consensus_n = 0
+    consensus_r = 0.0
+
+    if anchors:
+        # Group anchors by offset (within +/-2 tolerance)
+        from collections import Counter
+        offset_votes: dict[int, int] = {}
+        offset_best_r: dict[int, float] = {}
+
+        for a in anchors:
+            off = a["offset"]
+            # Find existing cluster within +/-2
+            matched_key = None
+            for existing in offset_votes:
+                if abs(off - existing) <= 2:
+                    matched_key = existing
+                    break
+            if matched_key is not None:
+                offset_votes[matched_key] += 1
+                offset_best_r[matched_key] = max(offset_best_r[matched_key], a["r"])
+            else:
+                offset_votes[off] = 1
+                offset_best_r[off] = a["r"]
+
+        # Pick offset with most votes, break ties by best r
+        consensus_offset = max(offset_votes,
+                               key=lambda o: (offset_votes[o], offset_best_r[o]))
+        consensus_n = offset_votes[consensus_offset]
+        consensus_r = offset_best_r[consensus_offset]
+
+    # ---- Stage 3: global correlation as fallback ----------------------------
+    global_r, global_n = _xcorr_at_offset(
+        lyra_cbd, lyra_hice, ref_lookup, 0, min_matched)
+    # Also find the global best offset
+    best_global_off, best_global_r, best_global_n = 0, global_r, global_n
+    # Quick scan: only test offsets near anchor consensus and at 0
+    scan_offsets = set(range(search_range[0], search_range[1] + 1))
+    for off in scan_offsets:
+        r, n = _xcorr_at_offset(lyra_cbd, lyra_hice, ref_lookup, off, min_matched)
+        if r > best_global_r:
+            best_global_off, best_global_r, best_global_n = off, r, n
+
+    # Second-best global (at least 5 away from best)
+    second_global_r = -1.0
+    for off in sorted(scan_offsets, key=lambda o: -_xcorr_at_offset(
+            lyra_cbd, lyra_hice, ref_lookup, o, min_matched)[0]):
+        if abs(off - best_global_off) >= 5:
+            r, _ = _xcorr_at_offset(lyra_cbd, lyra_hice, ref_lookup, off, min_matched)
+            if r > -9000:
+                second_global_r = r
+                break
+
+    # ---- Stage 4: terrain-weighted windowed consensus -------------------------
+    # Weight anchor votes by terrain richness (lyra_std) and peak sharpness
+    # (r - second_r).  Flat-ice windows have high r but tiny gap to 2nd-best,
+    # meaning offset is ambiguous there.  Terrain-rich windows with a clear
+    # peak are far more informative.
+    terrain_consensus_off = None
+    terrain_consensus_n = 0
+    terrain_consensus_r = 0.0
+
+    if anchors:
+        from collections import defaultdict
+        offset_weight: dict[int, float] = defaultdict(float)
+        offset_count: dict[int, int] = defaultdict(int)
+        offset_best_r2: dict[int, float] = defaultdict(float)
+
+        for a in anchors:
+            off = a["offset"]
+            gap = a["r"] - max(a["second_r"], 0)
+            weight = a["lyra_std"] * gap  # terrain richness x peak sharpness
+
+            # Find existing cluster within +/-2
+            matched_key = None
+            for existing in list(offset_weight):
+                if abs(off - existing) <= 2:
+                    matched_key = existing
+                    break
+            key = matched_key if matched_key is not None else off
+            offset_weight[key] += weight
+            offset_count[key] += 1
+            offset_best_r2[key] = max(offset_best_r2[key], a["r"])
+
+        # Pick offset with highest total weight
+        terrain_consensus_off = max(offset_weight,
+                                    key=lambda o: offset_weight[o])
+        terrain_consensus_n = offset_count[terrain_consensus_off]
+        terrain_consensus_r = offset_best_r2[terrain_consensus_off]
+
+    # ---- Stage 5: RIGGS-arbitrated decision ---------------------------------
+    # Collect all candidate offsets and pick the one with lowest RIGGS RMSE.
+    # If RIGGS is unavailable or insufficient, fall back to terrain-weighted
+    # consensus, then global correlation, then offset=0.
+    candidates = {0}
+    if terrain_consensus_off is not None:
+        candidates.add(terrain_consensus_off)
+    if best_global_off != 0:
+        candidates.add(best_global_off)
+
+    # Evaluate RIGGS at each candidate
+    riggs_results = {}
+    for cand in candidates:
+        rv = _riggs_validate(lyra_cbd, lyra_hice, flt_str, cand)
+        riggs_results[cand] = rv
+
+    # Pick candidate with lowest RIGGS RMSE (if >= 3 stations available)
+    has_riggs = any(
+        rv and rv.get("n_stations", 0) >= 3
+        for rv in riggs_results.values()
+    )
+
+    chosen_offset = 0
+    confidence = "low"
+    method = "global"
+    n_anchor = 0
+    report_r = best_global_r
+    report_n = best_global_n
+
+    if has_riggs:
+        # RIGGS arbitrates between candidates
+        best_rmse = 9999.0
+        for cand in candidates:
+            rv = riggs_results[cand]
+            rmse = (rv.get("rmse_m", 9999)
+                    if rv and rv.get("n_stations", 0) >= 3 else 9999)
+            if rmse < best_rmse:
+                best_rmse = rmse
+                chosen_offset = cand
+
+        if chosen_offset != 0 and chosen_offset == terrain_consensus_off:
+            method = "windowed"
+            n_anchor = terrain_consensus_n
+            report_r = terrain_consensus_r
+        elif chosen_offset != 0 and chosen_offset == best_global_off:
+            method = "global"
+            report_r = best_global_r
+
+        # Confidence based on RMSE and method
+        if best_rmse < 100:
+            confidence = "high"
+        elif best_rmse < 200:
+            confidence = "medium"
+        else:
+            confidence = "low"
+    else:
+        # No RIGGS: rely on windowed consensus or global correlation
+        if (terrain_consensus_off is not None
+                and terrain_consensus_n >= 3
+                and terrain_consensus_r >= 0.8):
+            chosen_offset = terrain_consensus_off
+            confidence = "high"
+            method = "windowed"
+            n_anchor = terrain_consensus_n
+            report_r = terrain_consensus_r
+        elif best_global_r > 0.8 and best_global_n >= 30:
+            chosen_offset = best_global_off
+            confidence = "medium"
+            method = "global"
+        # else: offset=0, low confidence (default)
+
+    # ---- Stage 6: track-geometry sanity check -------------------------------
+    try:
+        nav = load_stanford_nav(flt_str)
+        nav_cbds = lyra_cbd + chosen_offset
+        valid_mask = (nav_cbds >= 0) & (nav_cbds < len(nav))
+        if valid_mask.sum() >= 2:
+            from pyproj import Transformer
+            _T = Transformer.from_crs("EPSG:4326", "EPSG:3031", always_xy=True)
+            lats = nav["LAT"].values[nav_cbds[valid_mask]]
+            lons = nav["LON"].values[nav_cbds[valid_mask]]
+            x, y = _T.transform(lons, lats)
+            dists_km = np.sqrt(np.diff(x)**2 + np.diff(y)**2) / 1000.0
+            n_jumps = (dists_km > 10.0).sum()
+            if n_jumps > len(dists_km) * 0.1:
+                confidence = "low"  # discontinuous track -> downgrade
+    except FileNotFoundError:
+        pass
+
+    # ---- Stage 7: RIGGS validation at chosen offset -------------------------
+    riggs_val = riggs_results.get(chosen_offset)
+    if riggs_val is None:
+        riggs_val = _riggs_validate(lyra_cbd, lyra_hice, flt_str, chosen_offset)
+
+    return AlignmentResult(
+        flight=flt_int,
+        offset=chosen_offset,
+        correlation=round(report_r, 4),
+        n_matched=report_n if method == "global" else (
+            anchors[0]["n_pairs"] if anchors else 0),
+        n_reference=len(bingham),
+        search_range=search_range,
+        second_best_corr=round(second_global_r, 4),
+        confidence=confidence,
+        riggs_validation=riggs_val,
+        n_anchor_windows=n_anchor,
+        method=method,
+    )
+
+
+def _riggs_validate(lyra_cbd, lyra_hice, flt_str, offset,
+                    match_radius_km=50) -> dict | None:
+    """Cross-check alignment offset against RIGGS stations."""
+    import re as _re
+    from scipy.spatial import cKDTree
+    from pyproj import Transformer
+
+    if not _RIGGS_CSV.exists():
+        return None
+
+    riggs = pd.read_csv(_RIGGS_CSV)
+
+    # Parse DMS coordinates
+    def _dms(s):
+        s = str(s).strip().strip('"').strip("'")
+        m = _re.match(r'(\d+)\D+(\d+)\D+(\d+)["\']?\s*([NSEW])', s)
+        if not m:
+            return float("nan")
+        dd = int(m.group(1)) + int(m.group(2)) / 60.0 + int(m.group(3)) / 3600.0
+        if m.group(4) in ("S", "W"):
+            dd = -dd
+        return dd
+
+    riggs["lat_dd"] = riggs["Latitude"].apply(_dms)
+    riggs["lon_dd"] = riggs["Longitude"].apply(_dms)
+    valid_riggs = riggs.dropna(subset=["lat_dd", "lon_dd"])
+
+    # Get RIGGS h_ice (prefer seismic)
+    h_col_seis = "h_i (seismics), m"
+    h_col_radar = "h_i (radar), m"
+    riggs_hice = []
+    for _, r in valid_riggs.iterrows():
+        h = r.get(h_col_seis)
+        if pd.isna(h) or h == "" or (isinstance(h, str) and not h.strip()):
+            h = r.get(h_col_radar)
+        try:
+            riggs_hice.append(float(h))
+        except (TypeError, ValueError):
+            riggs_hice.append(np.nan)
+    valid_riggs = valid_riggs.copy()
+    valid_riggs["h_ice"] = riggs_hice
+    valid_riggs = valid_riggs[valid_riggs["h_ice"].notna()].copy()
+
+    if len(valid_riggs) == 0:
+        return None
+
+    # Get LYRA positions using offset
+    try:
+        nav = load_stanford_nav(flt_str)
+    except FileNotFoundError:
+        return None
+
+    T = Transformer.from_crs("EPSG:4326", "EPSG:3031", always_xy=True)
+
+    # LYRA positions
+    nav_cbds = lyra_cbd + offset
+    valid_mask = (nav_cbds >= 0) & (nav_cbds < len(nav))
+    if valid_mask.sum() == 0:
+        return None
+
+    lyra_lats = nav["LAT"].values[nav_cbds[valid_mask]]
+    lyra_lons = nav["LON"].values[nav_cbds[valid_mask]]
+    lyra_h = lyra_hice[valid_mask]
+    lx, ly = T.transform(lyra_lons, lyra_lats)
+    lyra_xy = np.column_stack([lx, ly])
+
+    # RIGGS positions
+    rx, ry = T.transform(valid_riggs["lon_dd"].values, valid_riggs["lat_dd"].values)
+    riggs_xy = np.column_stack([rx, ry])
+
+    # Match each RIGGS station to nearest LYRA frame
+    tree = cKDTree(lyra_xy)
+    dists, idxs = tree.query(riggs_xy)
+    dists_km = dists / 1000.0
+
+    matched = dists_km < match_radius_km
+    if not matched.any():
+        return {"n_stations": 0}
+
+    diffs = []
+    stations = []
+    for i in np.where(matched)[0]:
+        h_riggs = valid_riggs.iloc[i]["h_ice"]
+        h_lyra = lyra_h[idxs[i]]
+        if np.isfinite(h_lyra) and np.isfinite(h_riggs):
+            diffs.append(h_lyra - h_riggs)
+            stations.append(valid_riggs.iloc[i]["Station"])
+
+    if not diffs:
+        return {"n_stations": 0}
+
+    diffs = np.array(diffs)
+    return {
+        "n_stations": len(diffs),
+        "stations": stations,
+        "mean_diff_m": round(float(np.mean(diffs)), 1),
+        "median_diff_m": round(float(np.median(diffs)), 1),
+        "rmse_m": round(float(np.sqrt(np.mean(diffs**2))), 1),
+    }
+
+
+def get_nav_positions(
+    cbd_array,
+    flt: int | str,
+    offset: int = 0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Look up lat/lon positions for an array of CBDs with a CBD offset.
+
+    Parameters
+    ----------
+    cbd_array : array-like of LYRA CBD numbers
+    flt : flight number
+    offset : nav_row = lyra_cbd + offset
+
+    Returns
+    -------
+    lats, lons : arrays of latitude/longitude (NaN where out of range)
+    """
+    nav = load_stanford_nav(flt)
+    cbd_array = np.asarray(cbd_array, dtype=int)
+    nav_idx = cbd_array + offset
+
+    lats = np.full(len(cbd_array), np.nan)
+    lons = np.full(len(cbd_array), np.nan)
+
+    valid = (nav_idx >= 0) & (nav_idx < len(nav))
+    lats[valid] = nav["LAT"].values[nav_idx[valid]]
+    lons[valid] = nav["LON"].values[nav_idx[valid]]
+
+    return lats, lons
+
+
+def save_alignment(result: AlignmentResult, out_dir: Path) -> Path:
+    """Save alignment result to JSON."""
+    import json
+    val_dir = out_dir / "validation"
+    val_dir.mkdir(parents=True, exist_ok=True)
+    out_path = val_dir / f"F{result.flight}_alignment.json"
+    d = {
+        "flight": result.flight,
+        "offset": result.offset,
+        "correlation": result.correlation,
+        "n_matched": result.n_matched,
+        "n_reference": result.n_reference,
+        "search_range": list(result.search_range),
+        "second_best_corr": result.second_best_corr,
+        "confidence": result.confidence,
+        "riggs_validation": result.riggs_validation,
+        "n_anchor_windows": result.n_anchor_windows,
+        "method": result.method,
+    }
+    with open(out_path, "w") as f:
+        json.dump(d, f, indent=2)
+    return out_path
+
+
+def load_alignment(flt: int | str, out_dir: Path | None = None) -> AlignmentResult | None:
+    """Load a previously computed alignment result from JSON.
+
+    Returns None if no alignment file exists.
+    """
+    import json
+    flt_str = str(flt).lstrip("Ff")
+    if out_dir is None:
+        out_dir = _REPO_ROOT / "tools" / "LYRA" / "output" / f"F{flt_str}"
+    json_path = out_dir / "validation" / f"F{flt_str}_alignment.json"
+    if not json_path.exists():
+        return None
+    with open(json_path) as f:
+        d = json.load(f)
+    return AlignmentResult(
+        flight=d["flight"],
+        offset=d["offset"],
+        correlation=d["correlation"],
+        n_matched=d["n_matched"],
+        n_reference=d["n_reference"],
+        search_range=tuple(d["search_range"]),
+        second_best_corr=d["second_best_corr"],
+        confidence=d["confidence"],
+        riggs_validation=d.get("riggs_validation"),
+        n_anchor_windows=d.get("n_anchor_windows", 0),
+        method=d.get("method", "global"),
+    )
+
+
+def enrich_echoes_with_nav(flt: int | str,
+                           echoes_csv: Path | str | None = None,
+                           offset: int | None = None) -> Path:
+    """Add lat/lon columns to a flight's echoes CSV using the alignment offset.
+
+    If *offset* is None, loads the alignment JSON for the flight.
+    Overwrites the echoes CSV in-place with the new columns.
+
+    Returns the path to the updated CSV.
+    """
+    flt_str = str(flt).lstrip("Ff")
+    if echoes_csv is None:
+        echoes_csv = (_REPO_ROOT / "tools" / "LYRA" / "output"
+                      / f"F{flt_str}" / "phase4" / f"F{flt_str}_echoes.csv")
+    echoes_csv = Path(echoes_csv)
+    df = pd.read_csv(echoes_csv)
+    df.columns = df.columns.str.strip()
+
+    if offset is None:
+        alignment = load_alignment(flt_str)
+        if alignment is None:
+            raise FileNotFoundError(
+                f"No alignment JSON for F{flt_str}. Run validate_flight.py first.")
+        offset = alignment.offset
+
+    cbd_valid = df["cbd"].notna()
+    cbds = df.loc[cbd_valid, "cbd"].astype(int).values
+    lats_v, lons_v = get_nav_positions(cbds, flt_str, offset)
+
+    # Drop existing lat/lon columns if present (will re-insert)
+    df = df.drop(columns=["lat", "lon"], errors="ignore")
+
+    # Insert lat/lon right before mb_x
+    mb_idx = df.columns.get_loc("mb_x")
+    lat_col = np.full(len(df), np.nan)
+    lon_col = np.full(len(df), np.nan)
+    lat_col[cbd_valid.values] = np.round(lats_v, 6)
+    lon_col[cbd_valid.values] = np.round(lons_v, 6)
+    df.insert(mb_idx, "lon", lon_col)
+    df.insert(mb_idx, "lat", lat_col)
+
+    df.to_csv(echoes_csv, index=False)
+    return echoes_csv

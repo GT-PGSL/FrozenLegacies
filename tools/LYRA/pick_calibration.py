@@ -228,7 +228,7 @@ def save_picks_and_derive(all_picks: dict, flt: int, out_dir: Path):
         "n_frames_picked":   len(all_picks),
         "x_spacing_px":      round(x_spacing_px, 3),
         "y_spacing_px":      round(y_spacing_px, 3),
-        "us_per_px":         round(1.5  / x_spacing_px, 8),
+        "us_per_px":         round(2.0  / x_spacing_px, 8),
         "db_per_px":         round(10.0 / y_spacing_px, 8),
         "x_spacings_per_frame": {
             k: round(abs(sorted(v.get("x_grid",[])[:])[1] - sorted(v.get("x_grid",[])[:])[0]) /

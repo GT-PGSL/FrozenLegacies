@@ -66,16 +66,18 @@ The oscilloscope CRT has a calibrated graticule overlaid on the phosphor screen.
 
 | Axis | Major division | Pixel spacing | Physical value |
 |------|----------------|---------------|----------------|
-| X (time) | 1 major = 1.5 us | ~205 px | 1.5 us two-way travel time |
-| X (time) | 1 minor = 0.3 us | ~41 px | 4 minor ticks between majors |
+| X (time) | 1 major = 2.0 us | ~205 px | 2.0 us two-way travel time |
+| X (time) | 1 minor = 0.4 us | ~41 px | 4 minor ticks between majors |
 | Y (power) | 1 major = 10 dB | ~205 px | 10 dB received power |
 
-**ASTRA calibration error**: ASTRA assumed 3.0 us/major division. The correct value is **1.5 us/major**. All ASTRA travel times (surface_us, bed_us) are therefore **2x too large**. Never use ASTRA geometry. Use LYRA only.
+**Timebase correction (2026-03-10)**: The Tek 465 sweep speed is **2.0 us/div** (a standard setting), not 1.5. Neal 1977 Fig 1.3a annotates "~10 us" across ~5 divisions of the CRT (the portion containing radar features), not the full 10-division sweep. Validated against RIGGS seismic ground truth across 5 flights: the 4/3 correction (2.0/1.5) eliminates the systematic ~25% underestimate in both h_ice and h_air.
+
+**ASTRA calibration error**: ASTRA assumed 3.0 us/major division. The correct value is **2.0 us/major**. All ASTRA travel times (surface_us, bed_us) are therefore **1.5x too large**. Never use ASTRA geometry. Use LYRA only.
 
 ### 3.2 Calibration Constants (LYRA DEFAULT_CAL)
 
 ```python
-US_PER_PX  = 1.5 / 205.54   # = 0.007299 us/px
+US_PER_PX  = 2.0 / 205.54   # = 0.009732 us/px
 DB_PER_PX  = 10.0 / 205.0   # = 0.04878 dB/px
 Y_REF_PX   = 1507            # frame-relative y-pixel of the -60 dB reference line
 Y_REF_DB   = -60.0           # dB value at the reference row
