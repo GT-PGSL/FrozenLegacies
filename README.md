@@ -23,8 +23,8 @@ A-scope waveform extraction pipeline for raw TIFF scans of oscilloscope film.
 | 1. Frame detection + CBD assignment | `detect_frames.py` | `frame_index.csv`, contact sheet, OCR diagnostics |
 | 2. Interactive calibration picks | `pick_calibration.py` | `cal_picks.json` |
 | 3. Grid calibration | `calibrate.py` | Per-frame calibration CSV + diagnostic figures |
-| 4. Echo extraction + review | `echoes.py` | Surface/bed TWT, power, SNR, width, h_air, h_ice + review overrides |
-| 5. Validation | `validate_flight.py` | Multi-dataset validation figure + crossover analysis |
+| 4. Echo extraction + review | `echoes.py` | Surface/bed TWT, power, SNR, width, h_air, h_ice, lat, lon + review overrides |
+| 5. Validation + geographic positioning | `validate_flight.py` | CBD-to-nav alignment, lat/lon enrichment, validation figure + crossover analysis |
 
 ```bash
 # Typical single-TIFF workflow
@@ -37,7 +37,7 @@ python tools/LYRA/echoes.py           Data/ascope/raw/125/40_0008400_0008424-ree
 python tools/LYRA/run_flight.py 126
 ```
 
-**Validated on**: F125 (258 frames, 203 good), F126 (300 frames, 113 good), F128 (979 frames, 658 good), F141 (12 frames).
+**Validated on**: F125 (258 frames, 203 good), F126 (300 frames, 113 good), F127 (314 frames, 290 good), F128 (979 frames, 658 good), F137 (215 frames), F141 (12 frames).
 
 ### Other Tools
 
@@ -50,7 +50,7 @@ python tools/LYRA/run_flight.py 126
 
 ## Data
 
-- **Navigation**: 61 per-flight CSVs in `Navigation_Files/` (CBD, LAT, LON, THK, SRF; 66,141 records)
+- **Navigation**: 61 per-flight CSVs in `Navigation_Files/Stanford/` (CBD, LAT, LON, THK, SRF; 66,141 records; Rose 1978)
 - **ASTRA picks**: 12-flight digitized A-scope picks in `Data/ascope/picks/`
 - **RIGGS**: Ice thickness from the Ross Ice Shelf Geophysical and Glaciological Survey (Bentley 1984) in `Data/RIGGS/`
 - **Raw TIFFs**: Not included in this repository (12 GB). Contact the team for access.
@@ -65,12 +65,22 @@ python tools/LYRA/run_flight.py 126
 | F115 | Ross Ice Shelf | 405 | ASTRA complete |
 | F125 | Roosevelt Island / Ross Ice Shelf | 565 | LYRA phase 5 validated |
 | F126 | Ross Ice Shelf margin | 223 | LYRA phase 5 complete (37.7% yield) |
-| F127 | Ross Ice Shelf central | 570 | LYRA queued |
+| F127 | Ross Ice Shelf central | 570 | LYRA phase 5 complete (92.4% yield) |
 | F128 | Ross Ice Shelf | 760 | LYRA phase 5 complete (67.2% yield) |
-| F137 | Ross Ice Shelf NW | 146 | ASTRA complete |
-| F138 | Ross Ice Shelf | 323 | ASTRA complete |
+| F137 | Siple Coast / Ross Ice Shelf | 146 | LYRA phase 5 complete |
+| F138 | Ross Ice Shelf | 323 | LYRA queued |
 | F141 | Ross Ice Shelf | 498 | LYRA phase 3 validated |
-| F143 | Ross Ice Shelf / Siple Coast | 646 | ASTRA complete |
+| F143 | Ross Ice Shelf / Siple Coast | 646 | LYRA queued |
+
+## Geographic Positioning
+
+A-scope film frames carry CBD numbers but no coordinates. LYRA determines the integer offset *k* mapping each film CBD to a Stanford navigation waypoint (nav row = CBD + *k*) by cross-correlating LYRA-derived ice thickness against Bingham (2007) ICE_THICKN:
+
+1. **Windowed cross-correlation** — 40-CBD sliding windows identify terrain-rich segments (std > 30 m, *r* > 0.7) as anchor points
+2. **Terrain-weighted consensus** — anchor votes are weighted by ice-thickness variation and correlation peak sharpness, preventing flat-ice windows from dominating
+3. **RIGGS arbitration** — candidate offsets are evaluated against independent RIGGS ground-truth stations (Bentley 1984); the offset with the lowest RMSE is selected
+
+Once aligned, lat/lon are written directly into the `echoes.csv` for each frame. The 1:1 waypoint-to-CBD ratio (~2 km spacing) was confirmed across all flights (ratio 0.98--1.05).
 
 ## System Parameters
 
