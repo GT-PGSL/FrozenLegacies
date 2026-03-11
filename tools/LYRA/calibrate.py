@@ -179,14 +179,25 @@ if tiff_d_anchor is None:
 # Priority: per-TIFF picks first (handles TIFFs with MB at a different position
 # from the flight norm, e.g. F126 TIFF 2625 at ~730 px vs flight median ~580 px).
 # Falls back to flight-wide median only if no picks exist for this TIFF.
+# Detect duplicate CBDs within this TIFF (same fix as pick_calibration.py)
+from collections import Counter as _Counter
+_tiff_cbds = [str(r["cbd"]) for _, r in tiff_rows.iterrows()
+              if r["frame_type"] == "complete" and r["cbd"]]
+_dup_cbds = {c for c, n in _Counter(_tiff_cbds).items() if n > 1}
+
+def _cal_fkey(cbd, frame_idx):
+    """Build pick-lookup key, disambiguating duplicate CBDs with frame_idx."""
+    if cbd and str(cbd) in _dup_cbds:
+        return f"CBD{cbd}_f{frame_idx}"
+    return f"CBD{cbd}" if cbd else f"fr{frame_idx}"
+
 tiff_mb_estimate: float | None = None
 if raw_picks:
     # Determine which pick keys belong to the current TIFF
     _this_tiff_keys = set()
     for _, r in tiff_rows.iterrows():
-        if r["frame_type"] == "complete" and r["cbd"] and str(r["cbd"]) not in ("nan", ""):
-            _this_tiff_keys.add(f"CBD{r['cbd']}")
-        _this_tiff_keys.add(f"fr{r['frame_idx']}")
+        _cbd = r["cbd"] if r["cbd"] and str(r["cbd"]) not in ("nan", "") else None
+        _this_tiff_keys.add(_cal_fkey(_cbd, r["frame_idx"]))
 
     # Per-TIFF MB picks (preferred)
     _tiff_mbs = [
@@ -238,7 +249,7 @@ for _, anchor_row in tiff_rows.iterrows():
     # REF is stable and can come from ANY frame (including truncated start/end).
     # Width check is intentionally NOT applied here.
     cbd_a  = anchor_row["cbd"] if anchor_row["cbd"] else None
-    fkey_a = f"CBD{cbd_a}" if cbd_a else f"fr{anchor_row['frame_idx']}"
+    fkey_a = _cal_fkey(cbd_a, anchor_row["frame_idx"])
     if fkey_a in raw_picks:
         p_a = raw_picks[fkey_a]
         if p_a.get("ref") is not None:
@@ -354,7 +365,7 @@ if raw_picks:
         if _r["frame_type"] != "complete":
             continue
         _cbd = _r["cbd"] if _r["cbd"] and str(_r["cbd"]) not in ("nan", "") else None
-        _fk  = f"CBD{_cbd}" if _cbd else f"fr{_r['frame_idx']}"
+        _fk  = _cal_fkey(_cbd, _r["frame_idx"])
         if raw_picks.get(_fk, {}).get("exclude"):
             continue
         _left  = int(_r["left_px"])
@@ -417,7 +428,9 @@ for _, row in tiff_rows.iterrows():
     right_px   = int(row["right_px"])
 
     file_id = f"{TIFF_ID}_CBD{cbd}" if cbd else f"{TIFF_ID}_fr{frame_idx:02d}"
-    fkey    = f"CBD{cbd}" if cbd else f"fr{frame_idx}"
+    if cbd and str(cbd) in _dup_cbds:
+        file_id = f"{TIFF_ID}_CBD{cbd}_f{frame_idx}"
+    fkey    = _cal_fkey(cbd, frame_idx)
 
     if frame_type == "partial":
         print(f"  {frame_idx:>3}  {'—':>6}  {'—':>6}  {'—':>7}  "

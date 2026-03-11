@@ -273,6 +273,31 @@ def merge_with_nav(echoes: pd.DataFrame, nav: pd.DataFrame,
     return merged
 
 
+def _apply_nav_correction(merged: pd.DataFrame,
+                          nav_correction: _lyra.NavCorrection) -> None:
+    """Apply Rose 1978 piecewise-linear nav correction to merged LAT/LON.
+
+    Modifies the DataFrame in-place.
+    """
+    has_nav = merged["has_nav"] & merged["LAT"].notna() & merged["LON"].notna()
+    if not has_nav.any():
+        return
+
+    nav_cbds = merged.loc[has_nav, "nav_cbd"].values.astype(int)
+    lats = merged.loc[has_nav, "LAT"].values
+    lons = merged.loc[has_nav, "LON"].values
+
+    T_fwd = _TRANSFORM  # EPSG:4326 -> EPSG:3031 (already defined)
+    T_inv = Transformer.from_crs("EPSG:3031", "EPSG:4326", always_xy=True)
+
+    x_ps, y_ps = T_fwd.transform(lons, lats)
+    dx, dy = nav_correction.correction_at_cbd(nav_cbds)
+    lon_corr, lat_corr = T_inv.transform(x_ps + dx, y_ps + dy)
+
+    merged.loc[has_nav, "LAT"] = lat_corr
+    merged.loc[has_nav, "LON"] = lon_corr
+
+
 def match_reference(lats: np.ndarray, lons: np.ndarray,
                     ref_xy: np.ndarray, ref_thk: np.ndarray,
                     radius_m: float = MATCH_RADIUS_M
@@ -1227,9 +1252,31 @@ def main():
         "riggs_validation": alignment.riggs_validation,
     }
 
+    # -- Rose 1978 navigation correction -------------------------------------
+    nav_correction = _lyra.load_nav_correction(flt, out_dir)
+    if nav_correction is None:
+        nav_correction = _lyra.build_nav_correction(flt)
+        if nav_correction is not None:
+            _lyra.save_nav_correction(nav_correction, out_dir)
+    if nav_correction is not None:
+        n_fixes = len(nav_correction.fix_cbds)
+        max_corr_km = max(
+            np.sqrt(dx**2 + dy**2) / 1000
+            for dx, dy in zip(nav_correction.dx_at_fixes,
+                              nav_correction.dy_at_fixes))
+        print(f"    Nav correction: {n_fixes} fix points, "
+              f"max |corr| = {max_corr_km:.2f} km")
+    else:
+        print("    Nav correction: none (no Rose fix data)")
+    report["nav_correction"] = {
+        "applied": nav_correction is not None,
+        "n_fixes": len(nav_correction.fix_cbds) if nav_correction else 0,
+    }
+
     # -- Enrich echoes CSV with lat/lon ------------------------------------
     echoes_csv_path = out_dir / "phase4" / f"F{flt}_echoes.csv"
-    _lyra.enrich_echoes_with_nav(flt, echoes_csv_path, offset=alignment.offset)
+    _lyra.enrich_echoes_with_nav(flt, echoes_csv_path, offset=alignment.offset,
+                                 nav_correction=nav_correction)
     print(f"    Enriched echoes CSV with lat/lon (offset={alignment.offset:+d})")
 
     # -- Navigation --------------------------------------------------------
@@ -1241,6 +1288,10 @@ def main():
     merged = merge_with_nav(echoes, nav, offset=alignment.offset)
     n_with_nav = int(merged["has_nav"].sum())
     print(f"    {n_with_nav}/{len(merged)} frames matched to coordinates")
+
+    # Apply Rose nav correction to merged LAT/LON
+    if nav_correction is not None:
+        _apply_nav_correction(merged, nav_correction)
 
     # Echo status breakdown
     status_counts = merged["echo_status"].value_counts().to_dict()

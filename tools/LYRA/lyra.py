@@ -319,6 +319,12 @@ class EchoResult:
     trail_5_us:  float = np.nan
     width_5_us:  float = np.nan
 
+    # First-break onset: where signal first rises above NF + onset_db threshold
+    # Use onset_twt_us for ice thickness (shortest travel path = nadir reflection)
+    # Use peak_twt_us for reflectivity R0 (maximum returned power)
+    onset_twt_us: float = np.nan     # TWT at first break (us from MB)
+    onset_power_dB: float = np.nan   # power at onset point (dB)
+
     # Derived shape metrics
     leading_rise_us:  float = np.nan  # peak_twt - lead_10  (onset steepness; lower -> more specular)
     trailing_tail_us: float = np.nan  # trail_5 - trail_10  (subsurface scattering tail length)
@@ -1503,6 +1509,32 @@ def compute_echo_metrics(trace_y_s: np.ndarray,
         result.width_5_us = w5
         if not np.isnan(result.trail_10_us):
             result.trailing_tail_us = t5 - result.trail_10_us
+
+    # -- First-break onset: walk LEFT from peak to NF + onset_db ---------------
+    # The onset (first break) is where the signal first rises above the noise
+    # floor.  This gives the shortest two-way travel time (nadir reflection),
+    # which is more accurate for ice thickness than the peak TWT — especially
+    # over rough beds where off-nadir scattering can shift the peak later.
+    #
+    # Threshold: NF + 3 dB (just above noise; robust against noise fluctuations
+    # while catching the true first arrival).  Walk left from the peak using the
+    # smoothed trace; the onset is the last column above threshold before the
+    # signal drops into the noise.
+    ONSET_ABOVE_NF_DB = 3.0
+    onset_thresh_dB = noise_floor_dB + ONSET_ABOVE_NF_DB
+    if peak_power > onset_thresh_dB:
+        onset_thresh_y = db_to_px(onset_thresh_dB, cal)
+        onset_x = x_peak
+        for x in range(x_peak, max(mb_x, 0), -1):
+            if trace_y_s[x] >= onset_thresh_y:   # at or below threshold
+                onset_x = x + 1 if x < x_peak else x_peak
+                break
+        else:
+            onset_x = max(mb_x + 1, 0)
+        # Clamp to valid range
+        onset_x = max(mb_x + 1, min(onset_x, x_peak))
+        result.onset_twt_us = float(px_to_us(onset_x, mb_x, cal))
+        result.onset_power_dB = float(px_to_db(int(round(trace_y_s[onset_x])), cal))
 
     return result
 

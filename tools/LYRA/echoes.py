@@ -27,9 +27,13 @@ Usage
 Normal mode (extract echoes):
     python tools/LYRA/echoes.py [TIFF_PATH]
 
-Review mode (interactive override — click on image panel):
+Review mode (interactive override -- click on image panel):
     python tools/LYRA/echoes.py TIFF --review          # bad frames only
     python tools/LYRA/echoes.py TIFF --review --all     # all frames
+
+    Keys: [s]=surface mode  [b]=bed mode  click=set position
+          [S]=suppress surface  [B]=suppress bed  (mark as not present)
+          [d]=clear all overrides  [n/Right]=next  [p/Left]=prev  [q]=save & quit
 
 If TIFF_PATH is omitted, defaults to the F125 training TIFF (40_0008400…).
 
@@ -302,6 +306,7 @@ def review_mode():
     print(f"\nReview: {len(review_frames)} frames ({filter_label})")
     print(f"  Click on LEFT panel (image) to place pick on CRT trace")
     print(f"  Keys: [s]=surface  [b]=bed  click=set position")
+    print(f"        [S]=suppress surface  [B]=suppress bed  (mark as not present)")
     print(f"        [d]=clear overrides  [n/Right]=next  [p/Left]=prev  [q]=save & quit\n")
 
     frame_i = 0
@@ -426,11 +431,16 @@ def review_mode():
             m = st["mode"]
             ov = st["override"]
             parts = [f"Mode: {'SURFACE' if m == 's' else 'BED'}"]
-            if "surface_twt_us" in ov:
-                parts.append(f"Srf: {ov['surface_twt_us']:.2f} µs")
-            if "bed_twt_us" in ov:
-                parts.append(f"Bed: {ov['bed_twt_us']:.2f} µs")
-            if not ("surface_twt_us" in ov or "bed_twt_us" in ov):
+            if ov.get("surface_suppress"):
+                parts.append("Srf: SUPPRESSED")
+            elif "surface_twt_us" in ov:
+                parts.append(f"Srf: {ov['surface_twt_us']:.2f} us")
+            if ov.get("bed_suppress"):
+                parts.append("Bed: SUPPRESSED")
+            elif "bed_twt_us" in ov:
+                parts.append(f"Bed: {ov['bed_twt_us']:.2f} us")
+            if not any(k in ov for k in ("surface_twt_us", "bed_twt_us",
+                                          "surface_suppress", "bed_suppress")):
                 parts.append("No overrides")
             status_bar.set_text("  |  ".join(parts))
             col = "magenta" if m == "s" else "deepskyblue"
@@ -445,7 +455,23 @@ def review_mode():
             st["drawn"].clear()
 
             ov = st["override"]
-            if "surface_twt_us" in ov:
+
+            # Surface suppress: show X at algo surface position
+            if ov.get("surface_suppress"):
+                if algo_surface_x is not None and 0 <= algo_surface_x < frame_w:
+                    y_px = trace_y_s[algo_surface_x]
+                    st["drawn"].append(
+                        ax_img.plot(algo_surface_x, y_px, marker="X", color="magenta",
+                                    markersize=12, zorder=6, alpha=0.8,
+                                    markeredgecolor="white", markeredgewidth=1.0)[0])
+                # Label in top-left corner of image panel
+                st["drawn"].append(
+                    ax_img.text(0.02, 0.96, "SRF SUPPRESSED", transform=ax_img.transAxes,
+                                fontsize=9, color="magenta", fontweight="bold",
+                                va="top", ha="left",
+                                bbox=dict(boxstyle="round,pad=0.2", fc="white",
+                                          ec="magenta", alpha=0.85)))
+            elif "surface_twt_us" in ov:
                 twt = ov["surface_twt_us"]
                 x_px = mb_x + int(round(twt / us_per_px))
                 if 0 <= x_px < frame_w:
@@ -467,7 +493,21 @@ def review_mode():
                     st["drawn"].append(
                         ax_wave.axvline(twt, color="magenta", lw=0.8, alpha=0.4))
 
-            if "bed_twt_us" in ov:
+            # Bed suppress: show X at algo bed position
+            if ov.get("bed_suppress"):
+                if algo_bed_x is not None and 0 <= algo_bed_x < frame_w:
+                    y_px = trace_y_s[algo_bed_x]
+                    st["drawn"].append(
+                        ax_img.plot(algo_bed_x, y_px, marker="X", color="cyan",
+                                    markersize=12, zorder=6, alpha=0.8,
+                                    markeredgecolor="white", markeredgewidth=1.0)[0])
+                st["drawn"].append(
+                    ax_img.text(0.02, 0.90, "BED SUPPRESSED", transform=ax_img.transAxes,
+                                fontsize=9, color="cyan", fontweight="bold",
+                                va="top", ha="left",
+                                bbox=dict(boxstyle="round,pad=0.2", fc="white",
+                                          ec="cyan", alpha=0.85)))
+            elif "bed_twt_us" in ov:
                 twt = ov["bed_twt_us"]
                 x_px = mb_x + int(round(twt / us_per_px))
                 if 0 <= x_px < frame_w:
@@ -505,9 +545,11 @@ def review_mode():
                 return
             twt = (x_px - mb_x) * us_per_px
             if st["mode"] == "s":
+                st["override"].pop("surface_suppress", None)
                 st["override"]["surface_twt_us"] = round(twt, 3)
                 st["override"]["surface_y_px"] = round(float(y_px), 1)
             elif st["mode"] == "b":
+                st["override"].pop("bed_suppress", None)
                 st["override"]["bed_twt_us"] = round(twt, 3)
                 st["override"]["bed_y_px"] = round(float(y_px), 1)
             _redraw_overrides()
@@ -528,6 +570,17 @@ def review_mode():
                     f"({frame_i + 1}/{len(review_frames)})  mode=[BED]")
                 _update_status()
                 fig.canvas.draw_idle()
+            elif k == "S":   # Shift+S: suppress surface (mark as not present)
+                # Remove any surface position override, set suppress flag
+                st["override"].pop("surface_twt_us", None)
+                st["override"].pop("surface_y_px", None)
+                st["override"]["surface_suppress"] = True
+                _redraw_overrides()
+            elif k == "B":   # Shift+B: suppress bed (mark as not present)
+                st["override"].pop("bed_twt_us", None)
+                st["override"].pop("bed_y_px", None)
+                st["override"]["bed_suppress"] = True
+                _redraw_overrides()
             elif k == "d":
                 st["override"].clear()
                 _redraw_overrides()
@@ -635,13 +688,22 @@ for _, idx_row in tiff_rows.iterrows():
 
     # -- Apply manual overrides (from echo_overrides.json) --------------------
     is_surface_override = is_bed_override = False
+    is_surface_suppress = is_bed_suppress = False
     override = echo_overrides.get(file_id, {})
     us_per_px = cal["us_per_px"]
-    if "surface_twt_us" in override:
+    if override.get("surface_suppress"):
+        surface_x = None
+        is_surface_suppress = True
+        is_surface_override = True
+    elif "surface_twt_us" in override:
         surface_x = mb_x + int(round(override["surface_twt_us"] / us_per_px))
         surface_x = max(0, min(surface_x, frame_w - 1))
         is_surface_override = True
-    if "bed_twt_us" in override:
+    if override.get("bed_suppress"):
+        bed_x = None
+        is_bed_suppress = True
+        is_bed_override = True
+    elif "bed_twt_us" in override:
         bed_x = mb_x + int(round(override["bed_twt_us"] / us_per_px))
         bed_x = max(0, min(bed_x, frame_w - 1))
         is_bed_override = True
@@ -722,11 +784,17 @@ for _, idx_row in tiff_rows.iterrows():
 
     # -- Derived geometry -------------------------------------------------------
     h_air_m = h_ice_m = h_eff_m = np.nan
+    h_ice_onset_m = np.nan
     if surface is not None:
         h_air_m = surface.peak_twt_us / 2.0 * C_AIR_M_PER_US
     if surface is not None and bed is not None:
         h_ice_m = (bed.peak_twt_us - surface.peak_twt_us) / 2.0 * C_ICE_M_PER_US
         h_eff_m = h_air_m + h_ice_m / N_ICE
+        # Onset-based ice thickness: uses first-break TWT for both surface and
+        # bed when available, falling back to peak TWT when onset is NaN.
+        srf_onset = surface.onset_twt_us if not np.isnan(surface.onset_twt_us) else surface.peak_twt_us
+        bed_onset = bed.onset_twt_us if not np.isnan(bed.onset_twt_us) else bed.peak_twt_us
+        h_ice_onset_m = (bed_onset - srf_onset) / 2.0 * C_ICE_M_PER_US
 
     # -- Print summary line -----------------------------------------------------
     srf_twt = f"{surface.peak_twt_us:8.3f}" if surface else f"{'—':>8}"
@@ -786,6 +854,7 @@ for _, idx_row in tiff_rows.iterrows():
         surface_asymmetry     = round(_e(surface, "asymmetry"),       3),
         surface_leading_rise_us  = round(_e(surface, "leading_rise_us"),  4),
         surface_trailing_tail_us = round(_e(surface, "trailing_tail_us"), 4),
+        surface_onset_twt_us     = round(_e(surface, "onset_twt_us"),    4),
         # Bed echo (power and SNR corrected for system gain)
         bed_twt_us            = round(_e(bed, "peak_twt_us"),    4),
         bed_power_dB          = _corrected(_e(bed, "peak_power_dB")),
@@ -796,11 +865,13 @@ for _, idx_row in tiff_rows.iterrows():
         bed_asymmetry         = round(_e(bed, "asymmetry"),      3),
         bed_leading_rise_us   = round(_e(bed, "leading_rise_us"),  4),
         bed_trailing_tail_us  = round(_e(bed, "trailing_tail_us"), 4),
+        bed_onset_twt_us      = round(_e(bed, "onset_twt_us"),    4),
         bed_envelope_suspect  = bed_envelope_suspect,
         artifact_max_dB       = round(art_max_dB, 1),
         # Geometry (unaffected by gain correction)
         h_air_m = round(h_air_m, 1) if not np.isnan(h_air_m) else np.nan,
         h_ice_m = round(h_ice_m, 1) if not np.isnan(h_ice_m) else np.nan,
+        h_ice_onset_m = round(h_ice_onset_m, 1) if not np.isnan(h_ice_onset_m) else np.nan,
         h_eff_m = round(h_eff_m, 1) if not np.isnan(h_eff_m) else np.nan,
         # Override flags
         surface_override = is_surface_override,
@@ -834,18 +905,31 @@ for _, idx_row in tiff_rows.iterrows():
     ax_img.plot(x_all, trace_y_s, color="magenta", lw=0.8, alpha=0.7,
                 label="trace")
 
-    # Surface echo marker — diamond + "M" if manually overridden
-    if surface is not None:
+    # Surface echo marker — diamond + "M" if manually overridden, X if suppressed
+    if is_surface_suppress:
+        # Show algo position crossed out
+        if algo_surface_x is not None and algo_surface_x < len(trace_y_s):
+            ax_img.plot(algo_surface_x, trace_y_s[algo_surface_x], marker="X",
+                        color="lime", markersize=12, zorder=5, alpha=0.6,
+                        markeredgecolor="white", markeredgewidth=1.0,
+                        label="Srf SUPPRESSED [M]")
+    elif surface is not None:
         srf_marker = "D" if is_surface_override else "^"
-        srf_label  = f"Srf {surface.peak_twt_us:.2f}µs" + (" [M]" if is_surface_override else "")
+        srf_label  = f"Srf {surface.peak_twt_us:.2f}us" + (" [M]" if is_surface_override else "")
         ax_img.plot(surface_x, surface.peak_y, marker=srf_marker, color="lime", markersize=9,
                     zorder=5, label=srf_label)
         ax_img.axvline(surface_x, color="lime", lw=0.8, ls=":", alpha=0.7)
 
-    # Bed echo marker — diamond + "M" if manually overridden
-    if bed is not None:
+    # Bed echo marker — diamond + "M" if manually overridden, X if suppressed
+    if is_bed_suppress:
+        if algo_bed_x is not None and algo_bed_x < len(trace_y_s):
+            ax_img.plot(algo_bed_x, trace_y_s[algo_bed_x], marker="X",
+                        color="orange", markersize=12, zorder=5, alpha=0.6,
+                        markeredgecolor="white", markeredgewidth=1.0,
+                        label="Bed SUPPRESSED [M]")
+    elif bed is not None:
         bed_marker = "D" if is_bed_override else "^"
-        bed_label  = f"Bed {bed.peak_twt_us:.2f}µs" + (" [M]" if is_bed_override else "")
+        bed_label  = f"Bed {bed.peak_twt_us:.2f}us" + (" [M]" if is_bed_override else "")
         ax_img.plot(bed_x, bed.peak_y, marker=bed_marker, color="orange", markersize=9,
                     zorder=5, label=bed_label)
         ax_img.axvline(bed_x, color="orange", lw=0.8, ls=":", alpha=0.7)
@@ -891,6 +975,9 @@ for _, idx_row in tiff_rows.iterrows():
     ax_wave.axhline(noise_floor_dB, color="gray", lw=1.0, ls="--",
                     alpha=0.8, label=f"NF {noise_floor_dB:.1f} dB")
 
+    # NF+3 onset threshold (onset picking reference)
+    ax_wave.axhline(noise_floor_dB + 3.0, color="plum", lw=0.7, ls=":",
+                    alpha=0.7, label="NF+3 dB (onset)")
     # NF+5 and NF+10 thresholds (light gray dotted)
     ax_wave.axhline(noise_floor_dB + 5.0, color="silver", lw=0.7, ls=":",
                     alpha=0.8, label="NF+5 dB")
@@ -900,13 +987,18 @@ for _, idx_row in tiff_rows.iterrows():
     # Surface echo
     if surface is not None:
         srf_mk = "D" if is_surface_override else "^"
-        srf_lbl = (f"Srf {surface.peak_twt_us:.2f}µs  {surface.peak_power_dB:.1f}dB"
+        srf_lbl = (f"Srf {surface.peak_twt_us:.2f}us  {surface.peak_power_dB:.1f}dB"
                    + (" [M]" if is_surface_override else ""))
         ax_wave.axvline(surface.peak_twt_us, color="limegreen", lw=1.0, ls="--",
                         alpha=0.8)
         ax_wave.plot(surface.peak_twt_us, surface.peak_power_dB,
                      marker=srf_mk, color="limegreen", markersize=9, zorder=5,
                      label=srf_lbl)
+        # Onset marker (small circle at NF+3 crossing)
+        if not np.isnan(surface.onset_twt_us):
+            ax_wave.plot(surface.onset_twt_us, surface.onset_power_dB,
+                         marker="o", color="limegreen", markersize=5, zorder=5,
+                         alpha=0.7, markeredgecolor="white", markeredgewidth=0.5)
         # Envelope shading at +10 dB
         if not np.isnan(surface.lead_10_us) and not np.isnan(surface.trail_10_us):
             ax_wave.axvspan(surface.lead_10_us, surface.trail_10_us,
@@ -915,7 +1007,7 @@ for _, idx_row in tiff_rows.iterrows():
     # Bed echo
     if bed is not None:
         bed_mk = "D" if is_bed_override else "^"
-        bed_lbl = (f"Bed {bed.peak_twt_us:.2f}µs  {bed.peak_power_dB:.1f}dB\n"
+        bed_lbl = (f"Bed {bed.peak_twt_us:.2f}us  {bed.peak_power_dB:.1f}dB\n"
                    f"SNR={bed.peak_snr_dB:.1f}dB  peak={bed.peakiness:.2f}"
                    + (" [M]" if is_bed_override else ""))
         ax_wave.axvline(bed.peak_twt_us, color="darkorange", lw=1.0, ls="--",
@@ -923,6 +1015,11 @@ for _, idx_row in tiff_rows.iterrows():
         ax_wave.plot(bed.peak_twt_us, bed.peak_power_dB,
                      marker=bed_mk, color="darkorange", markersize=9, zorder=5,
                      label=bed_lbl)
+        # Onset marker (small circle at NF+3 crossing)
+        if not np.isnan(bed.onset_twt_us):
+            ax_wave.plot(bed.onset_twt_us, bed.onset_power_dB,
+                         marker="o", color="darkorange", markersize=5, zorder=5,
+                         alpha=0.7, markeredgecolor="white", markeredgewidth=0.5)
         # Envelope shading at +10 dB
         if not np.isnan(bed.lead_10_us) and not np.isnan(bed.trail_10_us):
             ax_wave.axvspan(bed.lead_10_us, bed.trail_10_us,

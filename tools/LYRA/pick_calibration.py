@@ -95,9 +95,22 @@ def parse_args():
 
 # -- TIFF queue logic ----------------------------------------------------------
 
-def _row_fkey(row) -> str:
+def _row_fkey(row, dup_cbds: set | None = None) -> str:
+    """Build a unique frame key.  When a CBD appears on multiple frames
+    (duplicate CBD), disambiguate with frame_idx to avoid key collision."""
     cbd = str(getattr(row, "cbd", "") or "")
-    return f"CBD{cbd}" if cbd else f"fr{row.frame_idx}"
+    fidx = int(getattr(row, "frame_idx", -1))
+    if cbd and dup_cbds and cbd in dup_cbds:
+        return f"CBD{cbd}_f{fidx}"
+    return f"CBD{cbd}" if cbd else f"fr{fidx}"
+
+
+def _detect_dup_cbds(rows) -> set:
+    """Return set of CBD strings that appear more than once in the frame list."""
+    from collections import Counter
+    cbds = [str(getattr(r, "cbd", "") or "") for r in rows
+            if str(getattr(r, "cbd", "") or "")]
+    return {c for c, n in Counter(cbds).items() if n > 1}
 
 
 def tiff_needs_picks(tiff_name: str, index_df: pd.DataFrame, picks: dict) -> bool:
@@ -296,14 +309,28 @@ def pick_one_tiff(tiff_path: Path, flt: int, all_picks: dict,
     else:
         print(f"  Q = save & quit  |  N = next  |  B = back")
 
-    # Build frame list (skip excluded)
+    # Detect duplicate CBDs within this TIFF (need disambiguated keys)
     all_rows = list(tiff_rows.itertuples())
+    dup_cbds = _detect_dup_cbds(all_rows)
+    if dup_cbds:
+        print(f"  Duplicate CBDs in TIFF: {sorted(dup_cbds)} -- using frame_idx-disambiguated keys")
+        # Migrate existing picks from old CBD-only key to disambiguated key
+        for r in all_rows:
+            cbd = str(getattr(r, "cbd", "") or "")
+            if cbd in dup_cbds:
+                old_key = f"CBD{cbd}"
+                new_key = _row_fkey(r, dup_cbds)
+                if old_key in all_picks and new_key not in all_picks:
+                    # Only migrate if the new key doesn't exist yet
+                    all_picks[new_key] = all_picks[old_key]
+
+    # Build frame list (skip excluded)
     frame_list = [r for r in all_rows
-                  if not all_picks.get(_row_fkey(r), {}).get("exclude")]
+                  if not all_picks.get(_row_fkey(r, dup_cbds), {}).get("exclude")]
     n_excl = len(all_rows) - len(frame_list)
     if n_excl:
-        excl_keys = [_row_fkey(r) for r in all_rows
-                     if all_picks.get(_row_fkey(r), {}).get("exclude")]
+        excl_keys = [_row_fkey(r, dup_cbds) for r in all_rows
+                     if all_picks.get(_row_fkey(r, dup_cbds), {}).get("exclude")]
         print(f"  Skipping {n_excl} excluded frame(s): {excl_keys}")
 
     # Apply CBD filter (show only specified CBDs)
@@ -319,7 +346,7 @@ def pick_one_tiff(tiff_path: Path, flt: int, all_picks: dict,
     while frame_i < len(frame_list):
         row = frame_list[frame_i]
         cbd = str(getattr(row, "cbd", "") or "")
-        fkey = f"CBD{cbd}" if cbd else f"fr{row.frame_idx}"
+        fkey = _row_fkey(row, dup_cbds)
         left_px = int(row.left_px)
         right_px = int(row.right_px)
         frame_w = right_px - left_px + 1
