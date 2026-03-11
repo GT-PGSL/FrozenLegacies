@@ -77,6 +77,10 @@ _parser.add_argument("--override", nargs="*", default=None, metavar="FR:CBD",
                      help="Manually override specific frame CBDs, e.g. "
                           "--override 10:444 11:445 12:446. "
                           "Implies --method manual if ASTRA data exists.")
+_parser.add_argument("--redetect", action="store_true", default=False,
+                     help="Re-detect frame boundaries while preserving existing "
+                          "CBD assignments from frame_index.csv. Matches new frames "
+                          "to old frames by spatial overlap. Skips OCR entirely.")
 _args, _ = _parser.parse_known_args()
 
 # Parse --override into dict {frame_idx: 4-digit CBD string}
@@ -116,11 +120,15 @@ PHASE1_DIR.mkdir(parents=True, exist_ok=True)
 INDEX_CSV = PHASE1_DIR / f"F{FLT}_frame_index.csv"
 
 # -- Method-specific setup -----------------------------------------------------
+REDETECT = _args.redetect
 OCR_METHOD = _args.method
 templates  = None
 astra_cbds = None   # list of CBD ints for this TIFF (manual method only)
 
-if OCR_METHOD == "manual":
+if REDETECT:
+    # --redetect mode: skip all OCR setup, we'll map CBDs from existing CSV
+    pass
+elif OCR_METHOD == "manual":
     # Read human-verified CBDs from ASTRA combined picks CSV.
     # ASTRA 'filename' column uses stems without .tiff extension.
     ASTRA_CSV = ROOT / f"Data/ascope/picks/{FLT}/{FLT}_CombinedASTRAPicks.csv"
@@ -154,7 +162,8 @@ elif OCR_METHOD in ("segment", "ensemble"):
 
 # -- Load image -----------------------------------------------------------------
 print(f"\nLYRA Step 1 — {TIFF.name}")
-print(f"  Flight  : F{FLT}  |  tiff_id : {TIFF_ID}  |  OCR : {OCR_METHOD}")
+_mode_str = "redetect (preserve CBDs)" if REDETECT else OCR_METHOD
+print(f"  Flight  : F{FLT}  |  tiff_id : {TIFF_ID}  |  mode : {_mode_str}")
 Image.MAX_IMAGE_PIXELS = None
 img      = np.array(Image.open(TIFF), dtype=np.float32)
 img_norm = (img - img.min()) / (img.max() - img.min() + 1e-9)
@@ -198,14 +207,81 @@ while merged:
                 merged = True
                 break   # restart scan after mutation
 
-# -- Stage 1: CBD recognition on complete frames --------------------------------
-complete_indices = [i for i, t in enumerate(frame_types) if t == "complete"]
-raw_reads_list   = []
-diag_blobs       = {}   # frame_idx -> blob list (for OCR diagnostic figure)
-diag_confs       = {}   # frame_idx -> per-digit Hamming distances
-method_used      = "override"   # updated below if OCR or manual runs
+# -- Redetect mode: preserve CBDs from existing frame_index.csv -----------------
+if REDETECT:
+    if not INDEX_CSV.exists():
+        sys.exit(f"ERROR: --redetect requires existing {INDEX_CSV.name} but none found.")
+    old_df = pd.read_csv(INDEX_CSV, dtype=str)
+    old_tiff = old_df[old_df["tiff"] == TIFF.name].copy()
+    if len(old_tiff) == 0:
+        sys.exit(f"ERROR: --redetect found no rows for {TIFF.name} in {INDEX_CSV.name}.")
 
-if CBD_START_OVERRIDE is not None:
+    # Build old frame list: (left_px, right_px, cbd, ocr_method, ocr_raw)
+    old_frames = []
+    for _, row in old_tiff.iterrows():
+        old_frames.append((
+            int(row["left_px"]), int(row["right_px"]),
+            row.get("cbd", ""), row.get("ocr_method", ""),
+            row.get("ocr_raw", ""),
+        ))
+
+    # Match new frames to old frames by spatial overlap (IoU).
+    # A new frame matches the old frame with highest overlap.
+    cbd_by_frame     = {}
+    ocr_raw_by_frame = {}
+    method_used      = "redetect"
+    n_matched = 0
+    for ni, (nl, nr) in enumerate(frames):
+        best_iou = 0.0
+        best_old = None
+        for oi, (ol, oright, ocbd, ometh, oraw) in enumerate(old_frames):
+            overlap = max(0, min(nr, oright) - max(nl, ol))
+            union   = max(nr, oright) - min(nl, ol)
+            iou     = overlap / union if union > 0 else 0.0
+            if iou > best_iou:
+                best_iou = iou
+                best_old = (ocbd, ometh, oraw)
+        if best_old and best_iou > 0.3:
+            ocbd, ometh, oraw = best_old
+            cbd_by_frame[ni]     = ocbd if (ocbd and ocbd != "nan") else None
+            ocr_raw_by_frame[ni] = f"(redetect:{oraw})" if oraw else "(redetect)"
+            if ocbd:
+                n_matched += 1
+        else:
+            cbd_by_frame[ni]     = None
+            ocr_raw_by_frame[ni] = "(redetect:unmatched)"
+
+    n_old_complete = sum(1 for _, _, c, _, _ in old_frames if c and c != "nan")
+    print(f"  Redetect: {len(old_frames)} old frames -> {n} new frames")
+    print(f"  CBD mapping: {n_matched}/{n_old_complete} CBDs preserved "
+          f"(IoU > 0.3)")
+    if n_matched < n_old_complete:
+        # Identify lost CBDs
+        old_cbds = {str(c) for _, _, c, _, _ in old_frames
+                    if c and str(c) not in ("nan", "", "None")}
+        new_cbds = {str(v) for v in cbd_by_frame.values()
+                    if v and str(v) not in ("nan", "", "None")}
+        lost = sorted(old_cbds - new_cbds)
+        if lost:
+            print(f"  Removed empty-gap frames (no CRT signal): CBD {', '.join(lost)}")
+
+    # Set variables that downstream code expects
+    complete_indices = [i for i, t in enumerate(frame_types) if t == "complete"]
+    n_anchors = n_matched
+    FRAME_OVERRIDES = {}  # no overrides in redetect mode
+
+else:
+    pass  # fall through to normal OCR path below
+
+# -- Stage 1: CBD recognition on complete frames --------------------------------
+if not REDETECT:
+    complete_indices = [i for i, t in enumerate(frame_types) if t == "complete"]
+    raw_reads_list   = []
+    diag_blobs       = {}   # frame_idx -> blob list (for OCR diagnostic figure)
+    diag_confs       = {}   # frame_idx -> per-digit Hamming distances
+    method_used      = "override"   # updated below if OCR or manual runs
+
+if not REDETECT and CBD_START_OVERRIDE is not None:
     # Last-resort override — assign CBDs sequentially from user-specified value.
     print(f"  cbd-start override: CBDs assigned {CBD_START_OVERRIDE} + sequential "
           f"(OCR skipped)")
@@ -216,7 +292,7 @@ if CBD_START_OVERRIDE is not None:
     raw_reads_list = ["(override)"] * len(complete_indices)
     n_anchors      = len(complete_indices)
 
-elif OCR_METHOD == "manual":
+elif not REDETECT and OCR_METHOD == "manual":
     # Use human-verified CBDs from ASTRA CSV — no OCR needed.
     method_used = "manual"
     n_astra    = len(astra_cbds)
@@ -236,7 +312,7 @@ elif OCR_METHOD == "manual":
     print(f"  ASTRA manual: {n_assign} CBDs assigned from "
           f"{FLT}_CombinedASTRAPicks.csv")
 
-else:
+elif not REDETECT:
     # OCR path: segment, ml, ensemble, or NCC
     method_used = OCR_METHOD
     ml_model = None
@@ -292,22 +368,23 @@ else:
         complete_indices, raw_reads_list, flight=FLT,
         confidences=conf_list if conf_list else None)
 
-# -- Build per-frame metadata ---------------------------------------------------
-# cbd_by_frame: frame_idx -> 4-digit CBD string or None
-# ocr_raw_by_frame: frame_idx -> raw OCR string (before sequential correction)
-cbd_by_frame     = {}
-ocr_raw_by_frame = {}
-corr_iter = iter(corrected_list)
-raw_iter2 = iter(raw_reads_list)
-for i, ftype in enumerate(frame_types):
-    if ftype == "complete":
-        corr = next(corr_iter)
-        raw  = next(raw_iter2)
-        cbd_by_frame[i]     = corr[3:] if (corr and len(corr) >= 7) else None
-        ocr_raw_by_frame[i] = str(raw) if raw else ""
-    else:
-        cbd_by_frame[i]     = None
-        ocr_raw_by_frame[i] = ""
+# -- Build per-frame metadata (skip in redetect mode — already populated) ------
+if not REDETECT:
+    # cbd_by_frame: frame_idx -> 4-digit CBD string or None
+    # ocr_raw_by_frame: frame_idx -> raw OCR string (before sequential correction)
+    cbd_by_frame     = {}
+    ocr_raw_by_frame = {}
+    corr_iter = iter(corrected_list)
+    raw_iter2 = iter(raw_reads_list)
+    for i, ftype in enumerate(frame_types):
+        if ftype == "complete":
+            corr = next(corr_iter)
+            raw  = next(raw_iter2)
+            cbd_by_frame[i]     = corr[3:] if (corr and len(corr) >= 7) else None
+            ocr_raw_by_frame[i] = str(raw) if raw else ""
+        else:
+            cbd_by_frame[i]     = None
+            ocr_raw_by_frame[i] = ""
 
 # -- Apply per-frame overrides with sequential propagation --------------------
 # Overrides act as anchor points. Between anchors (and beyond them), CBDs are
@@ -396,7 +473,9 @@ for i in range(n):
     fid      = frame_file_id(i)
     print(f"  {i:>3}  {ptype:>8}  {cbd_disp:>8}  {fid:>14}  {raw_disp:>10}")
 
-if CBD_START_OVERRIDE is not None:
+if REDETECT:
+    print(f"\n  Redetect: {n_anchors} CBDs preserved from existing frame_index.csv")
+elif CBD_START_OVERRIDE is not None:
     print(f"\n  CBD assignment: sequential override, {n_anchors}/{len(complete_indices)} frames assigned")
 elif method_used == "manual":
     print(f"\n  CBD assignment: ASTRA manual, {n_anchors}/{len(complete_indices)} frames assigned")

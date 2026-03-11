@@ -438,10 +438,21 @@ def detect_frames(img_norm: np.ndarray,
 
     gap_mask = normalized > gap_threshold
 
-    # Find centers of sufficiently wide gap regions; track widths for filtering
-    runs = _connected_components_1d(gap_mask)
+    # Find centers of sufficiently wide gap regions; track widths for filtering.
+    # First merge nearby runs: the smoothing boundary effects can fragment a
+    # single physical gap into 2-3 bright runs separated by a narrow dark dip.
+    # Any two above-threshold runs separated by < min_frame_px are part of the
+    # same inter-frame gap and should be merged.
+    raw_runs = _connected_components_1d(gap_mask)
+    merged_runs: list[tuple[int, int]] = []
+    for s, e in raw_runs:
+        if merged_runs and s - merged_runs[-1][1] < min_frame_px:
+            merged_runs[-1] = (merged_runs[-1][0], e)
+        else:
+            merged_runs.append((s, e))
+
     gap_info: list[tuple[int, int]] = []   # (width_px, center_px)
-    for s, e in runs:
+    for s, e in merged_runs:
         w = e - s + 1
         if w >= min_gap_px:
             gap_info.append((w, int(round((s + e) / 2))))
@@ -499,6 +510,74 @@ def detect_frames(img_norm: np.ndarray,
         est_w = W / expected_frames if expected_frames > 0 else W
         gap_centers = [int((i + 0.5) * est_w) for i in range(expected_frames - 1)]
 
+    # -- Spacing-guided gap prediction -----------------------------------------
+    # When the film has uneven exposure (e.g. bright first half, dim second half),
+    # global normalization fails to detect gaps in the dim section.  Use the
+    # regular frame spacing from the detected gaps to predict where missing gaps
+    # should be, then confirm each prediction against a local brightness peak.
+    #
+    # Physical basis: the 35 mm camera advance is mechanical and regular, so
+    # inter-frame gaps have approximately constant spacing across the TIFF.
+    min_needed = expected_frames - 1
+    # Only trigger when >30% of expected gaps are missing (avoids interfering
+    # with TIFFs that just have 1-2 missed gaps handled by the oversized splitter)
+    if len(gap_centers) >= 3 and len(gap_centers) < 0.7 * min_needed:
+        # Compute median spacing from consecutive detected gaps
+        spacings = [gap_centers[i+1] - gap_centers[i]
+                    for i in range(len(gap_centers) - 1)]
+        med_spacing = float(np.median(spacings))
+
+        # Build predicted gap positions: fill oversized intervals between
+        # consecutive gaps, then extend from the endpoints
+        predicted = set()
+        # Fill within oversized intervals between consecutive detected gaps
+        all_edges = [0] + gap_centers + [W]
+        for i in range(len(all_edges) - 1):
+            interval = all_edges[i + 1] - all_edges[i]
+            if interval > 1.5 * med_spacing:
+                n_gaps = int(round(interval / med_spacing)) - 1
+                if n_gaps >= 1:
+                    step = interval / (n_gaps + 1)
+                    for j in range(1, n_gaps + 1):
+                        p = int(round(all_edges[i] + j * step))
+                        if min_frame_px < p < W - min_frame_px:
+                            predicted.add(p)
+
+        # Remove predictions close to existing gap centers
+        tol = med_spacing * 0.25
+        predicted = {p for p in predicted
+                     if all(abs(p - g) > tol for g in gap_centers)}
+
+        # Confirm each prediction: find the local brightness maximum within
+        # +/- tol of the predicted position; accept if it's a local peak
+        added = []
+        for pred in sorted(predicted):
+            search_lo = max(0, int(pred - tol))
+            search_hi = min(W - 1, int(pred + tol))
+            if search_hi <= search_lo:
+                continue
+            local = col_smooth[search_lo:search_hi + 1]
+            peak_offset = int(np.argmax(local))
+            peak_col = search_lo + peak_offset
+            peak_val = col_smooth[peak_col]
+            # Accept if the peak stands out from the surrounding frame content:
+            # check that it's above the local mean in a wider neighborhood
+            neigh_lo = max(0, peak_col - int(med_spacing * 0.5))
+            neigh_hi = min(W - 1, peak_col + int(med_spacing * 0.5))
+            neigh_mean = col_smooth[neigh_lo:neigh_hi + 1].mean()
+            if peak_val > neigh_mean:
+                added.append(peak_col)
+
+        if added:
+            gap_centers = sorted(gap_centers + added)
+            # Re-apply the max_gaps cap
+            if len(gap_centers) > max_gaps:
+                # Keep the ones closest to expected regular spacing
+                gap_centers = gap_centers[:max_gaps]
+            print(f"  [detect_frames] spacing-guided prediction: added {len(added)} "
+                  f"gaps (median spacing={med_spacing:.0f} px, "
+                  f"total gaps now={len(gap_centers)})")
+
     # Build frames as intervals between gap centers
     frame_edges = [0] + gap_centers + [W]
     frames = []
@@ -508,11 +587,10 @@ def detect_frames(img_norm: np.ndarray,
         if right - left > min_frame_px:
             frames.append((max(0, left), min(W - 1, right)))
 
-    # -- Post-process: iteratively split oversized frames ----------------------
-    # If a separator was missed (e.g. faint-trace frame nearly as bright as the
-    # border), one entry may span 2+ physical A-scopes.  Find the brightest
-    # column in the middle region and split there.  Repeat until all frames are
-    # within 1.5× the median width.
+    # -- Post-process: split remaining oversized frames ----------------------------
+    # After spacing-guided prediction, individual frames may still be oversized
+    # (e.g. one missed gap in an otherwise well-detected TIFF).  Find the
+    # brightest column in the middle region and split there.
     if len(frames) >= 2:
         changed = True
         while changed:
@@ -522,18 +600,16 @@ def detect_frames(img_norm: np.ndarray,
             new_frames = []
             for l, r in frames:
                 if (r - l) > 1.5 * med_w and (r - l) > min_frame_px * 2:
-                    # Search middle 20%–80% for the sub-separator peak
                     sub_l    = l + int(0.20 * (r - l))
                     sub_r    = l + int(0.80 * (r - l))
                     sub_peak = sub_l + int(np.argmax(col_smooth[sub_l:sub_r]))
                     left_end  = max(l,     sub_peak - buffer_px - 1)
                     right_beg = min(W - 1, sub_peak + buffer_px + 1)
-                    # Only split if both halves are wide enough
                     if (left_end - l > min_frame_px
                             and r - right_beg > min_frame_px):
                         new_frames.append((l, left_end))
                         new_frames.append((right_beg, r))
-                        print(f"  [detect_frames] oversized frame {l}–{r} "
+                        print(f"  [detect_frames] oversized frame {l}-{r} "
                               f"(w={r-l}) split at col {sub_peak}")
                         changed = True
                     else:
@@ -541,6 +617,33 @@ def detect_frames(img_norm: np.ndarray,
                 else:
                     new_frames.append((l, r))
             frames = sorted(new_frames)
+
+    # -- Post-process: discard empty-gap frames (no CRT signal) --------------------
+    # Some TIFFs have extra-wide inter-frame gaps (4000+ px) that survive gap
+    # detection and get treated as oversized frames, then split.  The resulting
+    # "frames" are just bright film base with no dark CRT trace.  Detect these
+    # by measuring column-brightness contrast in the CRT display region: real
+    # frames have high std (bright background + dark trace), empty gaps have low.
+    if len(frames) >= 3:
+        crt_lo = int(H * 0.20)
+        crt_hi = int(H * 0.80)
+        crt_band = img_norm[crt_lo:crt_hi, :]
+        contrasts = []
+        for l, r in frames:
+            col_means = crt_band[:, l:r+1].mean(axis=0)
+            contrasts.append(float(col_means.std()))
+        med_contrast = float(np.median(contrasts))
+        # Keep frames with contrast > 15% of median (generous threshold to
+        # retain faint CRT traces while rejecting truly empty gaps)
+        if med_contrast > 0:
+            valid = [(f, c) for f, c in zip(frames, contrasts)
+                     if c > 0.15 * med_contrast]
+            n_removed = len(frames) - len(valid)
+            if n_removed > 0:
+                print(f"  [detect_frames] removed {n_removed} empty-gap "
+                      f"frame(s) (no CRT signal, contrast < 15% of median "
+                      f"{med_contrast:.4f})")
+                frames = [f for f, _ in valid]
 
     return frames
 
@@ -2047,6 +2150,466 @@ class AlignmentResult:
     method: str = "global"         # "windowed" or "global" (fallback)
 
 
+# ---- Rose 1978 Navigation Fix Data (Table 2.2, Table 2.3) ----------------
+
+ROSE_STATIONS = {
+    "mcmurdo_skiway":    {"lat": -77.8750, "lon": 166.9133, "alt_m": 10},
+    "mcmurdo_ice":       {"lat": -77.8817, "lon": 166.7117, "alt_m": 6},
+    "byrd":              {"lat": -80.0103, "lon": -119.5021, "alt_m": 1545},
+    "south_pole":        {"lat": -89.9954, "lon": 144.3411, "alt_m": 2830},
+    "roosevelt_island":  {"lat": -80.1917, "lon": -161.5617, "alt_m": 80},
+}
+
+_ROSE_TABLE_PATH = _REPO_ROOT / "docs" / "ross_table2-3.xlsx"
+
+# Stanford nav files use McMurdo Ice (not Skiway) as their McMurdo reference.
+# When comparing Stanford positions to known stations, use these coordinates.
+_STANFORD_NAV_STATIONS = {
+    "mcmurdo_skiway": {"lat": -77.8817, "lon": 166.7117},  # Stanford uses McMurdo Ice coords
+    "mcmurdo_ice":    {"lat": -77.8817, "lon": 166.7117},
+    "byrd":           {"lat": -80.0103, "lon": -119.5021},
+    "south_pole":     {"lat": -89.9954, "lon": 144.3411},
+    "roosevelt_island": {"lat": -80.1917, "lon": -161.5617},
+}
+
+
+def _parse_fix_station(note: str) -> str | None:
+    """Extract ROSE_STATIONS key from a Rose Table 2.3 note string.
+
+    Only assigns station coordinates for fixes where the aircraft is AT or
+    OVER a known station (overhead passes, terminals). Oblique photos are
+    taken from a distance, so the aircraft position != station position.
+    """
+    note_lower = note.lower()
+    is_oblique = "oblique" in note_lower or "oblqiue" in note_lower
+    is_overhead = "overhead" in note_lower or "ovehead" in note_lower
+    is_terminal = "terminal" in note_lower
+
+    # Oblique photos: aircraft is NOT at the station
+    if is_oblique:
+        return None
+
+    # Overhead passes: aircraft IS at the station
+    if is_overhead:
+        if "roosevelt" in note_lower:
+            return "roosevelt_island"
+        if "byrd" in note_lower:
+            return "byrd"
+        if "south pole" in note_lower:
+            return "south_pole"
+        return None
+
+    # Terminal fixes
+    if is_terminal:
+        # Strip "originated at ..." context — describes origin, not terminal
+        # e.g., "terminal (this flight originated at Pole)" = McMurdo terminal
+        term_note = note_lower
+        for origin_phrase in ["originated at pole", "originated at byrd",
+                              "orignated at byrd", "orignated at pole"]:
+            term_note = term_note.replace(origin_phrase, "")
+
+        if "roosevelt" in term_note:
+            return "roosevelt_island"
+        if "byrd" in term_note:
+            return "byrd"
+        if "south pole" in term_note or "pole" in term_note:
+            return "south_pole"
+        # Bare "terminal" = McMurdo (resolved by caller)
+        return None
+
+    return None
+
+
+def _parse_flight_origin(fixes: list[tuple]) -> str:
+    """Determine flight origin station from fix notes."""
+    for _, _, note in fixes:
+        if "originated at pole" in note.lower():
+            return "south_pole"
+        if "originated at byrd" in note.lower() or "orignated at byrd" in note.lower():
+            return "byrd"
+    return "mcmurdo_skiway"
+
+
+def load_rose_fixes() -> dict:
+    """Load Rose 1978 Table 2.3 from the digitized Excel file.
+
+    Returns dict mapping flight number -> list of (time_minutes, vector_km,
+    description, station_key_or_None).
+
+    station_key is a ROSE_STATIONS key for fixes with known coordinates
+    (terminal/overhead), or None for oblique photos.
+    """
+    import pandas as pd
+
+    if not _ROSE_TABLE_PATH.exists():
+        warnings.warn(f"Rose Table 2.3 not found: {_ROSE_TABLE_PATH}")
+        return {}
+
+    df = pd.read_excel(_ROSE_TABLE_PATH, skiprows=3, header=None,
+                       names=["flight", "h", "min", "vector_km", "note"])
+    df["flight"] = df["flight"].ffill().astype(int)
+
+    result = {}
+    for flt, grp in df.groupby("flight"):
+        fixes_raw = []
+        for _, row in grp.iterrows():
+            time_min = int(row["h"]) * 60 + int(row["min"])
+            note = str(row["note"]).strip() if pd.notna(row["note"]) else ""
+            fixes_raw.append((time_min, float(row["vector_km"]), note))
+
+        origin = _parse_flight_origin(fixes_raw)
+
+        fixes = []
+        for time_min, vector_km, note in fixes_raw:
+            station = _parse_fix_station(note)
+            # Resolve bare "terminal" to flight origin/destination
+            if station is None and "terminal" in note.lower():
+                # Terminal = origin for originated-at flights, McMurdo otherwise
+                # But terminal is at the END of the flight, so:
+                # - flights originating at McMurdo terminate at McMurdo
+                #   UNLESS the note says otherwise (e.g., "terminal, Byrd")
+                # - flights originating at Byrd/Pole terminate at McMurdo
+                #   (all non-McMurdo flights return to McMurdo)
+                if origin != "mcmurdo_skiway":
+                    station = "mcmurdo_skiway"
+                else:
+                    station = "mcmurdo_skiway"
+            fixes.append((time_min, vector_km, note, station))
+
+        result[flt] = fixes
+
+    return result
+
+
+def load_rose_flight_origins() -> dict:
+    """Return dict mapping flight number -> origin station key."""
+    fixes_all = load_rose_fixes()
+    origins = {}
+    for flt, fixes in fixes_all.items():
+        raw = [(t, v, n) for t, v, n, _ in fixes]
+        origins[flt] = _parse_flight_origin(raw)
+    return origins
+
+
+@dataclass
+class NavCorrection:
+    """CBD-varying navigation correction for a flight."""
+    flight: int
+    fix_cbds: list[int]          # CBD indices of fix points
+    dx_at_fixes: list[float]     # x correction (m) in EPSG:3031 at each fix
+    dy_at_fixes: list[float]     # y correction (m) in EPSG:3031 at each fix
+    fix_descriptions: list[str]  # description of each fix
+    assessment: str              # from diagnostics
+
+    def correction_at_cbd(self, cbd) -> tuple:
+        """Interpolate (dx, dy) correction in EPSG:3031 metres for given CBD(s).
+
+        Returns (dx, dy) arrays in metres.  Add these to the Stanford
+        EPSG:3031 coordinates to get corrected positions.
+        """
+        cbd = np.atleast_1d(np.asarray(cbd, dtype=float))
+        dx = np.interp(cbd, self.fix_cbds, self.dx_at_fixes)
+        dy = np.interp(cbd, self.fix_cbds, self.dy_at_fixes)
+        return dx, dy
+
+
+def diagnose_nav_fixes(flt: int | str, verbose: bool = True) -> dict:
+    """Compare Stanford nav positions at Rose fix points against known positions.
+
+    For fixes with known station coordinates (terminal fixes, overhead passes),
+    computes the residual distance between the Stanford nav position and the
+    true station position.  This reveals whether the Stanford nav files already
+    incorporate Rose's corrections.
+
+    Parameters
+    ----------
+    flt : flight number (with or without 'F' prefix)
+    verbose : print results to console
+
+    Returns
+    -------
+    dict with keys: flight, origin, n_nav_cbds, n_fixes, n_diagnosed,
+    fixes (list of per-fix dicts), assessment.
+    """
+    from pyproj import Transformer
+
+    flt_str = str(flt).lstrip("Ff")
+    flt_int = int(flt_str)
+
+    all_fixes = load_rose_fixes()
+    if flt_int not in all_fixes:
+        if verbose:
+            print(f"F{flt_str}: no Rose fix data available")
+        return {"flight": flt_int, "n_fixes": 0, "assessment": "no_data"}
+
+    fixes = all_fixes[flt_int]
+    origins = load_rose_flight_origins()
+    origin = origins.get(flt_int, "mcmurdo_skiway")
+
+    try:
+        nav = load_stanford_nav(flt_str)
+    except FileNotFoundError:
+        if verbose:
+            print(f"F{flt_str}: Stanford nav file not found")
+        return {"flight": flt_int, "n_fixes": len(fixes),
+                "assessment": "no_nav"}
+
+    n_nav = len(nav)
+    T = Transformer.from_crs("EPSG:4326", "EPSG:3031", always_xy=True)
+
+    results = []
+    for time_min, vector_km, desc, station_key in fixes:
+        # Convert time to approximate CBD index (20 s per CBD = 3 CBDs/min)
+        cbd_approx = int(round(time_min * 3))
+        cbd_clamped = min(max(cbd_approx, 0), n_nav - 1)
+
+        # For terminal fixes, use the actual last CBD of the nav file
+        is_terminal = "terminal" in desc.lower()
+        if is_terminal:
+            cbd_clamped = n_nav - 1
+
+        nav_lat = float(nav.iloc[cbd_clamped]["LAT"])
+        nav_lon = float(nav.iloc[cbd_clamped]["LON"])
+
+        fix_result = {
+            "time_min": time_min,
+            "vector_km": vector_km,
+            "description": desc,
+            "station": station_key,
+            "nav_cbd": cbd_clamped,
+            "nav_lat": round(nav_lat, 6),
+            "nav_lon": round(nav_lon, 6),
+            "true_lat": None,
+            "true_lon": None,
+            "residual_km": None,
+        }
+
+        if station_key is not None and station_key in _STANFORD_NAV_STATIONS:
+            nx, ny = T.transform(nav_lon, nav_lat)
+
+            # For McMurdo terminals, check both Ice and Skiway references
+            if station_key in ("mcmurdo_skiway", "mcmurdo_ice"):
+                ice = ROSE_STATIONS["mcmurdo_ice"]
+                sky = ROSE_STATIONS["mcmurdo_skiway"]
+                ix, iy = T.transform(ice["lon"], ice["lat"])
+                sx, sy = T.transform(sky["lon"], sky["lat"])
+                d_ice = np.sqrt((nx - ix)**2 + (ny - iy)**2) / 1000.0
+                d_sky = np.sqrt((nx - sx)**2 + (ny - sy)**2) / 1000.0
+                if d_ice < d_sky:
+                    true = ice
+                    dist_km = d_ice
+                    fix_result["mcmurdo_ref"] = "mcmurdo_ice"
+                else:
+                    true = sky
+                    dist_km = d_sky
+                    fix_result["mcmurdo_ref"] = "mcmurdo_skiway"
+            else:
+                true = _STANFORD_NAV_STATIONS[station_key]
+                tx, ty = T.transform(true["lon"], true["lat"])
+                dist_km = np.sqrt((nx - tx)**2 + (ny - ty)**2) / 1000.0
+
+            fix_result["true_lat"] = true["lat"]
+            fix_result["true_lon"] = true["lon"]
+            fix_result["residual_km"] = round(dist_km, 2)
+
+        results.append(fix_result)
+
+    # Assessment
+    diagnosed = [r for r in results if r["residual_km"] is not None]
+    n_diagnosed = len(diagnosed)
+
+    assessment = "inconclusive"
+    if n_diagnosed > 0:
+        residuals = [r["residual_km"] for r in diagnosed]
+        vectors = [r["vector_km"] for r in diagnosed]
+        mean_residual = np.mean(residuals)
+        mean_vector = np.mean(vectors)
+
+        if mean_residual < 2.0:
+            assessment = "likely_corrected"
+        elif mean_residual > 0.5 * mean_vector:
+            assessment = "likely_uncorrected"
+        else:
+            assessment = "partially_corrected"
+
+    result = {
+        "flight": flt_int,
+        "origin": origin,
+        "n_nav_cbds": n_nav,
+        "n_fixes": len(fixes),
+        "n_diagnosed": n_diagnosed,
+        "fixes": results,
+        "assessment": assessment,
+    }
+
+    if verbose:
+        print(f"\nF{flt_str} Navigation Fix Diagnostics")
+        print(f"  Origin: {origin} | Nav CBDs: {n_nav} | "
+              f"Fixes: {len(fixes)} ({n_diagnosed} with known coords)")
+        print(f"  {'Time':>6s}  {'CBD':>5s}  {'Rose km':>8s}  "
+              f"{'Residual':>9s}  Description")
+        print(f"  {'----':>6s}  {'---':>5s}  {'-------':>8s}  "
+              f"{'--------':>9s}  -----------")
+        for r in results:
+            resid_str = (f"{r['residual_km']:8.2f}" if r["residual_km"] is not None
+                         else "     N/A")
+            mc_ref = r.get("mcmurdo_ref", "")
+            mc_tag = f" [{mc_ref}]" if mc_ref else ""
+            t = r["time_min"]
+            print(f"  {t//60:2d}h{t%60:02d}m  {r['nav_cbd']:5d}  "
+                  f"{r['vector_km']:8.1f}  {resid_str}  "
+                  f"{r['description']}{mc_tag}")
+        print(f"\n  Assessment: {assessment}")
+
+    return result
+
+
+def diagnose_all_nav_fixes(verbose: bool = True) -> dict:
+    """Run diagnose_nav_fixes for all flights with Rose fix data.
+
+    Returns dict mapping flight number to diagnostic result.
+    """
+    all_fixes = load_rose_fixes()
+    all_results = {}
+    for flt in sorted(all_fixes.keys()):
+        try:
+            r = diagnose_nav_fixes(flt, verbose=verbose)
+            all_results[flt] = r
+        except Exception as e:
+            if verbose:
+                print(f"F{flt}: ERROR - {e}")
+            all_results[flt] = {"flight": flt, "assessment": "error",
+                                "error": str(e)}
+        if verbose:
+            print()
+    return all_results
+
+
+def build_nav_correction(flt: int | str) -> NavCorrection | None:
+    """Build a CBD-varying position correction from Rose fix diagnostics.
+
+    Computes the error vector (true minus Stanford) at each fix point with
+    known coordinates, then builds a piecewise-linear correction that can
+    be interpolated at any CBD.
+
+    Returns None if no fixes with known coordinates exist.
+    """
+    from pyproj import Transformer
+
+    diag = diagnose_nav_fixes(flt, verbose=False)
+    if diag.get("assessment") in ("no_data", "no_nav", "error"):
+        return None
+
+    flt_int = diag["flight"]
+    origin = diag["origin"]
+
+    T = Transformer.from_crs("EPSG:4326", "EPSG:3031", always_xy=True)
+    nav = load_stanford_nav(flt_int)
+
+    fix_cbds = []
+    dx_list = []
+    dy_list = []
+    descs = []
+
+    # Determine which McMurdo reference this flight's nav file uses
+    # by checking the terminal fix from the diagnostic
+    mcmurdo_ref = "mcmurdo_skiway"  # default
+    for fix in diag["fixes"]:
+        if fix.get("mcmurdo_ref"):
+            mcmurdo_ref = fix["mcmurdo_ref"]
+            break
+
+    def _get_true_coords(station_key):
+        """Get true coordinates, using the correct McMurdo reference."""
+        if station_key in ("mcmurdo_skiway", "mcmurdo_ice"):
+            return ROSE_STATIONS[mcmurdo_ref]
+        return ROSE_STATIONS[station_key]
+
+    # Add origin as first fix point (CBD 0 = known station)
+    # Only if CBD 0 is actually near the origin station (< 10 km)
+    if origin in _STANFORD_NAV_STATIONS:
+        true = _get_true_coords(origin)
+        nav_lat = float(nav.iloc[0]["LAT"])
+        nav_lon = float(nav.iloc[0]["LON"])
+        nx, ny = T.transform(nav_lon, nav_lat)
+        tx, ty = T.transform(true["lon"], true["lat"])
+        origin_dist_km = np.sqrt((nx - tx)**2 + (ny - ty)**2) / 1000.0
+        if origin_dist_km < 10.0:
+            fix_cbds.append(0)
+            dx_list.append(tx - nx)
+            dy_list.append(ty - ny)
+            descs.append(f"origin: {origin} [{mcmurdo_ref}]")
+
+    # Add diagnosed fixes with known station coords
+    for fix in diag["fixes"]:
+        if fix["residual_km"] is None or fix["station"] is None:
+            continue
+        cbd = fix["nav_cbd"]
+        true = _get_true_coords(fix["station"])
+        nx, ny = T.transform(fix["nav_lon"], fix["nav_lat"])
+        tx, ty = T.transform(true["lon"], true["lat"])
+        fix_cbds.append(cbd)
+        dx_list.append(tx - nx)
+        dy_list.append(ty - ny)
+        descs.append(fix["description"])
+
+    if len(fix_cbds) < 1:
+        return None
+
+    # Deduplicate: keep last entry for each CBD
+    seen = {}
+    for i, cbd in enumerate(fix_cbds):
+        seen[cbd] = i
+    unique_idxs = sorted(seen.values(), key=lambda i: fix_cbds[i])
+    fix_cbds = [fix_cbds[i] for i in unique_idxs]
+    dx_list = [dx_list[i] for i in unique_idxs]
+    dy_list = [dy_list[i] for i in unique_idxs]
+    descs = [descs[i] for i in unique_idxs]
+
+    return NavCorrection(
+        flight=flt_int,
+        fix_cbds=fix_cbds,
+        dx_at_fixes=dx_list,
+        dy_at_fixes=dy_list,
+        fix_descriptions=descs,
+        assessment=diag["assessment"],
+    )
+
+
+def save_nav_correction(corr: NavCorrection, out_dir: Path) -> Path:
+    """Save NavCorrection to JSON."""
+    import json
+    val_dir = out_dir / "validation"
+    val_dir.mkdir(parents=True, exist_ok=True)
+    out_path = val_dir / f"F{corr.flight}_nav_correction.json"
+    d = {
+        "flight": corr.flight,
+        "fix_cbds": corr.fix_cbds,
+        "dx_at_fixes": [round(x, 1) for x in corr.dx_at_fixes],
+        "dy_at_fixes": [round(y, 1) for y in corr.dy_at_fixes],
+        "fix_descriptions": corr.fix_descriptions,
+        "assessment": corr.assessment,
+    }
+    with open(out_path, "w") as f:
+        json.dump(d, f, indent=2)
+    return out_path
+
+
+def load_nav_correction(flt: int | str,
+                        out_dir: Path | None = None) -> NavCorrection | None:
+    """Load a previously saved NavCorrection from JSON."""
+    import json
+    flt_str = str(flt).lstrip("Ff")
+    if out_dir is None:
+        out_dir = _REPO_ROOT / "tools" / "LYRA" / "output" / f"F{flt_str}"
+    json_path = out_dir / "validation" / f"F{flt_str}_nav_correction.json"
+    if not json_path.exists():
+        return None
+    with open(json_path) as f:
+        d = json.load(f)
+    return NavCorrection(**d)
+
+
 def _xcorr_at_offset(lyra_cbd, lyra_hice, ref_lookup, offset, min_pairs=10):
     """Compute Pearson r for a single offset. Returns (r, n_pairs)."""
     shifted = lyra_cbd + offset
@@ -2505,6 +3068,7 @@ def get_nav_positions(
     cbd_array,
     flt: int | str,
     offset: int = 0,
+    nav_correction: NavCorrection | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Look up lat/lon positions for an array of CBDs with a CBD offset.
 
@@ -2513,11 +3077,15 @@ def get_nav_positions(
     cbd_array : array-like of LYRA CBD numbers
     flt : flight number
     offset : nav_row = lyra_cbd + offset
+    nav_correction : optional piecewise-linear position correction from
+        Rose 1978 fix data.  When provided, corrects INS drift at each CBD.
 
     Returns
     -------
     lats, lons : arrays of latitude/longitude (NaN where out of range)
     """
+    from pyproj import Transformer
+
     nav = load_stanford_nav(flt)
     cbd_array = np.asarray(cbd_array, dtype=int)
     nav_idx = cbd_array + offset
@@ -2528,6 +3096,25 @@ def get_nav_positions(
     valid = (nav_idx >= 0) & (nav_idx < len(nav))
     lats[valid] = nav["LAT"].values[nav_idx[valid]]
     lons[valid] = nav["LON"].values[nav_idx[valid]]
+
+    # Apply Rose 1978 piecewise-linear nav correction if provided
+    if nav_correction is not None and np.any(valid):
+        T_fwd = Transformer.from_crs("EPSG:4326", "EPSG:3031", always_xy=True)
+        T_inv = Transformer.from_crs("EPSG:3031", "EPSG:4326", always_xy=True)
+
+        v_lats = lats[valid]
+        v_lons = lons[valid]
+        v_nav_idx = nav_idx[valid]
+
+        # Project to EPSG:3031, apply correction, project back
+        x_ps, y_ps = T_fwd.transform(v_lons, v_lats)
+        dx, dy = nav_correction.correction_at_cbd(v_nav_idx)
+        x_corr = x_ps + dx
+        y_corr = y_ps + dy
+        lon_corr, lat_corr = T_inv.transform(x_corr, y_corr)
+
+        lats[valid] = lat_corr
+        lons[valid] = lon_corr
 
     return lats, lons
 
@@ -2587,10 +3174,13 @@ def load_alignment(flt: int | str, out_dir: Path | None = None) -> AlignmentResu
 
 def enrich_echoes_with_nav(flt: int | str,
                            echoes_csv: Path | str | None = None,
-                           offset: int | None = None) -> Path:
+                           offset: int | None = None,
+                           nav_correction: NavCorrection | None = None) -> Path:
     """Add lat/lon columns to a flight's echoes CSV using the alignment offset.
 
     If *offset* is None, loads the alignment JSON for the flight.
+    If *nav_correction* is provided, applies Rose 1978 piecewise-linear
+    position correction to compensate for INS drift.
     Overwrites the echoes CSV in-place with the new columns.
 
     Returns the path to the updated CSV.
@@ -2612,7 +3202,8 @@ def enrich_echoes_with_nav(flt: int | str,
 
     cbd_valid = df["cbd"].notna()
     cbds = df.loc[cbd_valid, "cbd"].astype(int).values
-    lats_v, lons_v = get_nav_positions(cbds, flt_str, offset)
+    lats_v, lons_v = get_nav_positions(cbds, flt_str, offset,
+                                       nav_correction=nav_correction)
 
     # Drop existing lat/lon columns if present (will re-insert)
     df = df.drop(columns=["lat", "lon"], errors="ignore")
