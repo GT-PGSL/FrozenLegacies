@@ -27,14 +27,36 @@ A-scope waveform extraction pipeline for raw TIFF scans of oscilloscope film.
 | 5. Validation + geographic positioning | `validate_flight.py` | CBD-to-nav alignment, lat/lon enrichment, validation figure + crossover analysis |
 
 ```bash
-# Typical single-TIFF workflow
-python tools/LYRA/detect_frames.py    Data/ascope/raw/125/40_0008400_0008424-reel_begin_end.tiff
-python tools/LYRA/pick_calibration.py Data/ascope/raw/125/40_0008400_0008424-reel_begin_end.tiff
-python tools/LYRA/calibrate.py        Data/ascope/raw/125/40_0008400_0008424-reel_begin_end.tiff
-python tools/LYRA/echoes.py           Data/ascope/raw/125/40_0008400_0008424-reel_begin_end.tiff
+# Command to run an entire flight (e.g., Flight 126): 
+python tools/LYRA/run_flight.py 126 
 
-# Or run an entire flight automatically:
-python tools/LYRA/run_flight.py 126
+## Resume from a specific phase (skips earlier phases)
+python tools/LYRA/run_flight.py 126 --resume-from 3
+
+# Or to run individual tiff (e.g., F126 TIFF 2525):
+## Phase 1: Frame detection + CBD assignment
+python tools/LYRA/detect_frames.py 126/2525  
+
+## Phase 2: Interactive calibration picks for main bang
+python tools/LYRA/pick_calibration.py 126/2525  
+
+## Phase 3: Per-frame calibration
+python tools/LYRA/calibrate.py 126/2525
+
+## Phase 4: Surface and bed echoes extraction
+python tools/LYRA/echoes.py 126/2525
+
+## Phase 5: Validation with RIGGS ice thickness
+python tools/LYRA/validate_flight.py 126
+
+# To review and fix surface and bed picks: 
+python tools/LYRA/echoes.py 126/2525 --review 
+
+## After review, re-validate to update: 
+python tools/LYRA/validate_flight.py 126
+
+# To compile ice thickness results in a PDF with maps (e.g. F126): 
+for tiff in Data/ascope/raw/126/*.tiff; do python tools/LYRA/build_pdf.py "$tiff"; done
 ```
 
 **Validated on**: F125 (258 frames, 203 good), F126 (300 frames, 113 good), F127 (314 frames, 290 good), F128 (979 frames, 658 good), F137 (215 frames), F141 (12 frames).
